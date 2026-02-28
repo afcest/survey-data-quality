@@ -1,0 +1,1058 @@
+---
+title: "Getting Started with afcestDataCheck"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Getting Started with afcestDataCheck}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>",
+  eval = FALSE
+)
+```
+
+## 1. Introduction
+
+**afcestDataCheck** is an R package for automated high-frequency data quality
+checks on survey data. It is designed for field coordinators, data managers,
+and M&E specialists working on agricultural, health, and socioeconomic surveys
+in development projects.
+
+### Why another HFC package?
+
+Several excellent tools exist for high-frequency checks:
+
+| Tool | Language | Checks | Fabrication detection | Multi-platform |
+|------|----------|--------|-----------------------|----------------|
+| `iehfc` (World Bank) | Stata | ~15 | No | Stata-only |
+| `ipacheck` (IPA) | Stata | ~20 | Limited | Stata-only |
+| `HighFrequencyChecks` (UNHCR) | R | ~25 | No | KoBo-focused |
+| **afcestDataCheck** | **R** | **54+** | **Yes (7 methods)** | **5 platforms** |
+
+### What makes afcestDataCheck different
+
+- **54+ check functions** organized into 10 categories
+- **Fabrication detection**: Benford's Law (1st and 2nd digit), digit preference,
+  intraclass correlation (ICC), variance ratio, response entropy, duplicate
+  response patterns, and straightlining
+- **Multi-platform normalizer**: KoBoToolbox, SurveyCTO, ODK Central,
+  Survey Solutions, and CSPro -- auto-detected or manually specified
+- **YAML-driven configuration**: one config file controls which checks run,
+  what thresholds apply, and which variables to target
+- **Standardized output**: every check returns the same `check_result` structure,
+  making results easy to combine, filter, and export
+- **Production-ready exports**: styled Excel workbooks with conditional formatting,
+  and CSV outputs for automated pipelines
+
+## 2. Installation
+
+```{r install}
+# Install from GitHub (requires the remotes package)
+install.packages("remotes")
+remotes::install_github("afcest/survey-data-quality")
+
+# For Excel export support, also install openxlsx2
+install.packages("openxlsx2")
+```
+
+Load the package:
+
+```{r library}
+library(afcestDataCheck)
+```
+
+## 3. Quick Start (5-minute workflow)
+
+This section walks you through a complete workflow using synthetic data.
+
+### 3.1 Create sample data
+
+```{r sample-data}
+library(afcestDataCheck)
+
+survey_data <- data.frame(
+  hh_id = c("HH001", "HH002", "HH003", "HH003", "HH004",
+             NA, "HH006", "HH007", "HH008", "HH009"),
+  enum_id = c("E01", "E01", "E02", "E02", "E01",
+               "E02", "E03", "E03", "E03", "E03"),
+  submission_date = as.Date(c(
+    "2025-02-01", "2025-02-01", "2025-02-02", "2025-02-02", "2025-02-03",
+    "2025-02-03", "2025-02-04", "2025-02-04", "2025-02-04", "2025-02-04"
+  )),
+  duration_minutes = c(25, 5, 45, 30, 120, 15, 22, 28, 35, 40),
+  income = c(50000, 45000, 60000, -5000, 1000000,
+             30000, 42000, 55000, 48000, 51000),
+  expenditure = c(40000, 20000, 50000, 80000, 60000,
+                  25000, 38000, 52000, 44000, 49000),
+  hh_size = c(5, 3, 7, 4, 2, 50, 6, 4, 8, 3),
+  gps_latitude = c(12.37, 12.38, 12.36, 12.36, 0,
+                    12.40, 12.39, 12.39, 12.41, 12.42),
+  gps_longitude = c(-1.52, -1.53, -1.51, -1.51, 0,
+                     -1.55, -1.54, -1.54, -1.56, -1.57),
+  respondent_name = c("Adama Ouedraogo", "Fatima Diallo", "test", "Ibrahim Sow",
+                       "A", "Mariam Traore", "Ousmane Belem", "Aissata Kone",
+                       "Boureima Sanou", "Salamata Zoungrana"),
+  phone = c("70123456", "76543210", "123", "71234567", "70000000",
+            "76000000", "78123456", "70111111", "76222222", "78333333"),
+  stringsAsFactors = FALSE
+)
+```
+
+### 3.2 Run individual checks
+
+Each check function takes a data frame, an ID column name, and check-specific
+parameters. Every function returns a `check_result` object:
+
+```{r individual-checks}
+# Check for duplicate IDs
+res_dup <- check_duplicate_ids(survey_data, "hh_id")
+print(res_dup)
+#> [x] A01_duplicate_id: 1/10 flagged (error)
+
+# Check for missing IDs
+res_miss <- check_missing_ids(survey_data, "hh_id")
+print(res_miss)
+#> [x] A03_missing_id: 1/10 flagged (error)
+
+# Check survey duration
+res_dur <- check_survey_duration(
+  survey_data, "hh_id", "duration_minutes",
+  min_duration = 15, max_duration = 90
+)
+print(res_dur)
+
+# Check outliers using IQR
+res_out <- check_outliers_iqr(survey_data, "hh_id", "income", multiplier = 1.5)
+print(res_out)
+
+# Access flagged IDs programmatically
+res_dup$flagged_ids
+#> [1] "HH003"
+
+res_dup$flag_reason
+#> [1] "ID 'HH003' appears 2 times"
+```
+
+### 3.3 Run all checks from a config file
+
+The most powerful way to use the package is through the orchestrator,
+`run_all_checks()`, which reads a YAML config file and runs every
+enabled check:
+
+```{r run-all}
+report <- run_all_checks(survey_data, "path/to/config.yml")
+
+# Print a summary
+print(report)
+#> -- afcestDataCheck Report: Example Household Survey --
+#> Timestamp: 2025-02-04 14:30:00
+#> Checks run: 12
+#> Checks with flags: 8
+#> Check errors: 0
+
+# Get the summary tibble
+summary(report)
+#> # A tibble: 12 x 6
+#>    check_name            check_category n_flagged n_total pct_flagged severity
+#>    <chr>                 <chr>              <int>   <int>       <dbl> <chr>
+#>  1 A01_duplicate_id      identification         1      10       10    error
+#>  2 A03_missing_id        identification         1      10       10    error
+#>  ...
+```
+
+### 3.4 Export results
+
+```{r export}
+# Export to a styled Excel workbook
+export_to_excel(
+  report$results,
+  survey_data,
+  id_col = "hh_id",
+  path = "hfc_report.xlsx"
+)
+
+# Export to CSV files
+export_to_csv(
+  report$results,
+  output_dir = "output/",
+  prefix = "hfc_report"
+)
+# Creates: output/hfc_report_summary.csv
+#          output/hfc_report_flagged.csv
+```
+
+## 4. Configuration
+
+### 4.1 The YAML config structure
+
+afcestDataCheck uses a YAML file with three required sections and several
+optional ones:
+
+```yaml
+# ---- Required sections ----
+project:
+  name: "Household Survey 2025"
+  survey_start: "2025-01-15"
+  survey_end: "2025-03-15"
+
+variables:
+  id: "hh_id"                  # Required
+  enumerator: "enumerator_id"  # Required
+  date: "submission_date"
+  start_time: "start"
+  end_time: "end"
+  duration: "duration_minutes"
+
+# ---- Optional: check configuration ----
+checks:
+  identification:
+    duplicate_ids: true
+    missing_ids: true
+  completeness:
+    missing_by_variable:
+      enabled: true
+      threshold: 0.05
+  outliers:
+    method: "iqr"
+    multiplier: 1.5
+    variables:
+      - col: "income"
+        min: 0
+        max: 1000000
+  timing:
+    duration:
+      min_minutes: 15
+      max_minutes: 120
+```
+
+### 4.2 Minimal vs. full config
+
+A **minimal config** needs only the `project` and `variables` sections.
+All checks with `default_val = TRUE` in the orchestrator will run
+automatically (duplicates, missing IDs, missing by variable, duration, etc.):
+
+```yaml
+# minimal_config.yml
+project:
+  name: "Quick check"
+variables:
+  id: "hh_id"
+  enumerator: "enum_id"
+```
+
+A **full config** explicitly enables/disables every check and sets all
+thresholds. See `inst/example_config.yml` for the complete template.
+
+### 4.3 Enabling and disabling checks
+
+Checks can be toggled using a simple boolean or an `enabled` flag inside
+a settings block:
+
+```yaml
+checks:
+  identification:
+    duplicate_ids: true        # Simple boolean
+    id_in_sample: false        # Disabled
+    id_format:
+      enabled: true            # Nested enabled flag
+      pattern: "^HH\\d{3}$"   # Check-specific parameter
+
+  enumerator:
+    productivity:              # This entire block enables the check
+      max_daily: 8             # and sets its threshold
+```
+
+### 4.4 Setting thresholds
+
+Thresholds are set per-check inside the YAML:
+
+```yaml
+checks:
+  outliers:
+    method: "iqr"       # Choose: "iqr", "zscore", or "mad"
+    multiplier: 1.5     # IQR fence multiplier (used with "iqr")
+    threshold: 3        # Z-score / MAD threshold (used with "zscore" or "mad")
+
+  timing:
+    duration:
+      min_minutes: 15   # Surveys shorter than this are flagged
+      max_minutes: 120  # Surveys longer than this are flagged
+
+  enumerator:
+    productivity:
+      max_daily: 10     # Max surveys per enumerator per day
+    dk_rate:
+      dk_values: ["dk", "don't know", "-99", "-88"]
+      threshold_sd: 2   # Flag if DK rate > mean + 2*SD
+```
+
+### 4.5 Reading config in code
+
+```{r config-api}
+# Read and validate
+cfg <- read_config("config.yml")
+
+# Access nested values safely with defaults
+method <- cfg_get(cfg, "checks", "outliers", "method", default = "iqr")
+max_daily <- cfg_get(cfg, "checks", "enumerator", "productivity",
+                     "max_daily", default = 10)
+```
+
+## 5. Check Categories
+
+afcestDataCheck organizes its 54+ checks into 10 categories. Below are
+examples for each.
+
+### 5.1 Identification
+
+Detect duplicate, missing, or invalid survey IDs.
+
+```{r cat-identification}
+# A.01: Duplicate primary keys
+check_duplicate_ids(survey_data, "hh_id")
+
+# A.03: Missing or empty IDs
+check_missing_ids(survey_data, "hh_id")
+
+# A.02: Fingerprint duplicates (different ID, same quasi-identifiers)
+check_duplicate_fingerprint(
+  survey_data, "hh_id",
+  quasi_ids = c("gps_latitude", "gps_longitude", "respondent_name")
+)
+
+# A.05: IDs not in the sampling frame
+valid_ids <- c("HH001", "HH002", "HH003", "HH004", "HH006")
+check_id_in_sample(survey_data, "hh_id", sampling_frame = valid_ids)
+```
+
+### 5.2 Metadata
+
+Validate consent, form version, interview status, and survey tracking.
+
+```{r cat-metadata}
+# A.06: Consent check
+check_consent(survey_data, "hh_id", "consent", consent_value = 1)
+
+# A.07: Form version validation
+check_form_version(survey_data, "hh_id", "form_version",
+                   expected_version = "v2.1")
+
+# A.09: Interview completion status
+check_interview_completed(survey_data, "hh_id", "status",
+                          complete_value = "complete")
+
+# A.10: Survey tracking by stratum
+check_survey_tracking(survey_data, "hh_id", "region",
+                      target_per_stratum = list(North = 100, South = 150))
+```
+
+### 5.3 Completeness
+
+Monitor missing data rates and validate skip patterns.
+
+```{r cat-completeness}
+# C.01: Missing rate by variable (flag variables with >5% missing)
+check_missing_by_variable(survey_data, "hh_id", threshold = 0.05)
+
+# C.02: Missing rate by enumerator (flag enumerators 2 SD above mean)
+check_missing_by_enumerator(survey_data, "hh_id", "enum_id",
+                            threshold_sd = 2)
+
+# C.04: Entirely missing variables
+check_all_missing_variables(survey_data)
+
+# C.03: Skip pattern validation
+check_skip_pattern(
+  survey_data, "hh_id",
+  parent_col = "has_livestock",
+  child_col = "n_cattle",
+  parent_value = "no",
+  expect_child_na = TRUE
+)
+
+# C.07: Roster completeness (HH size vs. roster member count)
+check_roster_completeness(survey_data, "hh_id",
+                          hh_size_col = "hh_size",
+                          member_count_col = "roster_count")
+```
+
+### 5.4 Outliers
+
+Detect statistical and hard-range outliers.
+
+```{r cat-outliers}
+# D.01: IQR method (flag values outside Q1 - 1.5*IQR, Q3 + 1.5*IQR)
+check_outliers_iqr(survey_data, "hh_id", "income", multiplier = 1.5)
+
+# D.02: Robust Z-score (median/MAD-based)
+check_outliers_zscore(survey_data, "hh_id", "income", threshold = 3)
+
+# D.03: Modified Z-score (MAD method)
+check_outliers_mad(survey_data, "hh_id", "income", threshold = 3)
+
+# D.04: Hard range constraints
+check_hard_range(survey_data, "hh_id", "hh_size", min_val = 1, max_val = 30)
+
+# D.09: Negative values in non-negative columns
+check_negative_values(survey_data, "hh_id", "income")
+```
+
+### 5.5 Enumerator Performance
+
+Monitor enumerator behavior for quality and productivity issues.
+
+```{r cat-enumerator}
+# B.01: Daily productivity (flag if > max_daily surveys per day)
+check_enumerator_productivity(survey_data, "hh_id", "enum_id",
+                              "submission_date", max_daily = 10)
+
+# B.02: Mean duration by enumerator (flag if suspiciously low)
+check_enumerator_duration(survey_data, "hh_id", "enum_id",
+                          "duration_minutes", threshold_sd = 2)
+
+# B.03: "Don't know" response rate by enumerator
+check_dk_rate(survey_data, "hh_id", "enum_id",
+              dk_value = c("dk", "don't know", "-99"),
+              threshold_sd = 2)
+
+# B.08: Time gap between consecutive surveys
+check_enumerator_time_gap(survey_data, "hh_id", "enum_id",
+                          "start_time", min_gap_minutes = 5)
+```
+
+### 5.6 Timing
+
+Validate survey duration and collection dates.
+
+```{r cat-timing}
+# F.01: Survey duration bounds
+check_survey_duration(survey_data, "hh_id", "duration_minutes",
+                      min_duration = 15, max_duration = 120)
+
+# F.02: Collection window (outside survey period)
+check_collection_window(survey_data, "hh_id", "submission_date",
+                        start_date = "2025-01-15", end_date = "2025-03-15")
+
+# F.03: Future dates
+check_future_dates(survey_data, "hh_id", "submission_date")
+
+# F.04: End time before start time
+check_survey_end_before_start(survey_data, "hh_id", "start", "end")
+
+# F.06: Duration relative to household size
+check_duration_by_hh_size(survey_data, "hh_id", "duration_minutes",
+                          "hh_size", min_minutes_per_member = 3)
+```
+
+### 5.7 GPS Validation
+
+Validate geographic coordinates for accuracy, boundaries, and anomalies.
+
+```{r cat-gps}
+# E.01: GPS boundary (bounding box or sf polygon)
+check_gps_boundary(survey_data, "hh_id", "gps_latitude", "gps_longitude",
+                   boundary_bbox = list(xmin = -6, xmax = 3,
+                                        ymin = 9, ymax = 15))
+
+# E.02: Distance from cluster centroid
+check_gps_centroid_distance(survey_data, "hh_id",
+                            "gps_latitude", "gps_longitude",
+                            cluster_col = "cluster_id",
+                            max_distance_km = 10)
+
+# E.03: GPS accuracy threshold
+check_gps_accuracy(survey_data, "hh_id", "gps_accuracy",
+                   max_accuracy = 50)
+
+# E.04: Duplicate GPS coordinates
+check_gps_duplicates(survey_data, "hh_id",
+                     "gps_latitude", "gps_longitude",
+                     min_distance = 0.0001)
+
+# E.05: Swapped latitude/longitude
+check_gps_swap(survey_data, "hh_id", "gps_latitude", "gps_longitude",
+               expected_bbox = list(lat_min = 9, lat_max = 15,
+                                    lon_min = -6, lon_max = 3))
+
+# E.07: Null island / default GPS values (0, 999, -999)
+check_gps_null_island(survey_data, "hh_id",
+                      "gps_latitude", "gps_longitude")
+
+# E.08: Excessive GPS clustering (fabrication indicator)
+check_gps_clustering(survey_data, "hh_id",
+                     "gps_latitude", "gps_longitude",
+                     enum_col = "enum_id", max_same_point = 3)
+
+# E.10: Altitude plausibility
+check_gps_altitude(survey_data, "hh_id", "gps_altitude",
+                   min_alt = -500, max_alt = 6000)
+```
+
+### 5.8 Fabrication Detection
+
+Statistical tests to identify potentially fabricated survey data.
+
+```{r cat-fabrication}
+# M.01: Benford's Law first-digit test
+check_benford_first_digit(survey_data, "hh_id", "income")
+
+# M.02: Benford's Law second-digit test
+check_benford_second_digit(survey_data, "hh_id", "income")
+
+# M.03: Terminal digit preference (digit heaping)
+check_digit_preference(survey_data, "hh_id", "income")
+
+# B.09: Straightlining (identical responses across columns)
+check_straightlining(
+  survey_data, "hh_id",
+  check_cols = c("q1", "q2", "q3", "q4", "q5"),
+  max_identical_rate = 0.8
+)
+
+# M.04: Intraclass correlation by enumerator
+check_icc_enumerator(
+  survey_data, "hh_id", "enum_id",
+  num_cols = c("income", "expenditure", "hh_size"),
+  max_icc = 0.15
+)
+
+# M.06: Response entropy (low diversity detection)
+check_response_entropy(
+  survey_data, "hh_id",
+  check_cols = c("q1", "q2", "q3", "q4", "q5"),
+  min_entropy_ratio = 0.3
+)
+
+# M.07: Duplicate response patterns across surveys
+check_duplicate_response_patterns(
+  survey_data, "hh_id",
+  check_cols = c("income", "expenditure", "hh_size"),
+  similarity_threshold = 0.95
+)
+
+# M.08: Between/within variance ratio by enumerator
+check_variance_ratio(
+  survey_data, "hh_id", "enum_id",
+  num_cols = c("income", "expenditure"),
+  max_ratio = 2
+)
+```
+
+### 5.9 Logic Consistency
+
+Cross-variable logical consistency checks.
+
+```{r cat-logic}
+# G.01: Household composition plausibility
+check_hh_composition(survey_data, "hh_id", "hh_size",
+                     roster_count_col = "roster_count")
+
+# G.04: Income-expenditure ratio
+check_income_expenditure(survey_data, "hh_id",
+                         "income", "expenditure",
+                         max_ratio = 5)
+
+# F.09: Age vs. date of birth consistency
+check_age_date_consistency(survey_data, "hh_id",
+                           "age", "date_of_birth",
+                           tolerance_years = 1)
+
+# G.12: Custom logic assertions (write any R expression)
+check_custom_logic(
+  survey_data, "hh_id",
+  condition_expr = "hh_size > 0 & income < 0",
+  description = "Positive HH size but negative income"
+)
+
+# Another custom check: expenditure > income for low-income households
+check_custom_logic(
+  survey_data, "hh_id",
+  condition_expr = "income < 20000 & expenditure > 3 * income",
+  description = "Very high expenditure relative to low income"
+)
+```
+
+### 5.10 Text Quality
+
+Validate free-text fields, names, and phone numbers.
+
+```{r cat-text}
+# O.01: Other (specify) write-in responses for review
+check_other_specify(survey_data, "hh_id", "crop_other")
+
+# O.02: Text response length
+check_text_length(survey_data, "hh_id", "comments",
+                  min_length = 3, max_length = 500)
+
+# O.03: Duplicated text responses (copy-paste detection)
+check_text_duplicates(survey_data, "hh_id", "comments",
+                      min_length = 10)
+
+# O.04: Name format validation (catches "test", digits-only, single chars)
+check_name_format(survey_data, "hh_id", "respondent_name")
+
+# O.05: Phone number format
+check_phone_format(survey_data, "hh_id", "phone",
+                   country_code = "+226",
+                   min_digits = 8, max_digits = 15)
+```
+
+## 6. Working with Survey Platforms
+
+### 6.1 The normalizer
+
+`normalize_survey_data()` detects the survey platform from column names
+and creates standardized columns (`.id`, `.enum`, `.date`, `.start`, `.end`,
+`.duration`, `.latitude`, `.longitude`):
+
+```{r normalize}
+# Auto-detect platform
+normalized <- normalize_survey_data(kobo_data, platform = "auto")
+
+# Explicit platform
+normalized <- normalize_survey_data(surveycto_data, platform = "surveycto")
+
+# Manual column mapping (overrides platform defaults)
+normalized <- normalize_survey_data(
+  my_data,
+  platform = "auto",
+  id_col = "household_key",
+  enum_col = "interviewer",
+  date_col = "survey_date"
+)
+```
+
+### 6.2 Supported platforms
+
+| Platform | Auto-detection keys | ID default | Date default |
+|----------|---------------------|------------|--------------|
+| KoBoToolbox | `_id`, `_submission_time` | `_id` | `_submission_time` |
+| SurveyCTO | `KEY`, `submissiondate` | `KEY` | `submissiondate` |
+| ODK Central | `__id`, `__system/*` | `__id` | `__system/submissionDate` |
+| Survey Solutions | `interview__id` | `interview__id` | `date` |
+| CSPro | `guid`, `case_id` | `guid` or `case_id` | -- |
+
+### 6.3 KoBoToolbox workflow
+
+```{r kobo-workflow}
+# If using robotoolbox to pull data directly:
+# library(robotoolbox)
+# kobo_data <- kobo_submissions("asset_uid")
+
+# Or read exported CSV
+kobo_data <- read.csv("kobo_export.csv")
+
+# Normalize (auto-detects KoBo from _id and _submission_time columns)
+normalized <- normalize_survey_data(kobo_data)
+
+# Run checks using normalized column names in config
+report <- run_all_checks(normalized, "config_kobo.yml")
+```
+
+### 6.4 SurveyCTO workflow
+
+```{r surveycto-workflow}
+# Read SurveyCTO export
+scto_data <- read.csv("surveycto_export.csv")
+
+# Normalize (auto-detects from KEY and submissiondate columns)
+normalized <- normalize_survey_data(scto_data, platform = "surveycto")
+
+# Your config references SurveyCTO column names
+report <- run_all_checks(normalized, "config_scto.yml")
+```
+
+### 6.5 ODK Central workflow
+
+```{r odk-workflow}
+# If using ruODK:
+# library(ruODK)
+# odk_data <- odata_submission_get(fid = "my_form")
+
+odk_data <- read.csv("odk_export.csv")
+normalized <- normalize_survey_data(odk_data, platform = "odk")
+report <- run_all_checks(normalized, "config_odk.yml")
+```
+
+### 6.6 GPS string parsing
+
+KoBo and ODK sometimes store GPS as a single space-separated string
+(`"12.37 -1.52 300 5"`). Use `parse_gps_string()` to extract components:
+
+```{r gps-parse}
+gps_strings <- c("12.37 -1.52 300 5", "12.38 -1.53 310 8", NA)
+parsed <- parse_gps_string(gps_strings)
+parsed
+#> # A tibble: 3 x 4
+#>   latitude longitude altitude accuracy
+#>      <dbl>     <dbl>    <dbl>    <dbl>
+#> 1    12.37     -1.52      300        5
+#> 2    12.38     -1.53      310        8
+#> 3    NA        NA          NA       NA
+```
+
+## 7. The `check_result` Object
+
+### 7.1 Structure
+
+Every check function returns a `check_result` object -- a named list with
+a consistent structure:
+
+```{r result-structure}
+res <- check_duplicate_ids(survey_data, "hh_id")
+
+str(res)
+#> List of 9
+#>  $ check_name    : chr "A01_duplicate_id"
+#>  $ check_category: chr "identification"
+#>  $ n_flagged     : int 1
+#>  $ n_total       : int 10
+#>  $ flagged_ids   : chr "HH003"
+#>  $ flag_reason   : chr "ID 'HH003' appears 2 times"
+#>  $ severity      : chr "error"
+#>  $ summary_stat  : list (check-specific statistics)
+#>  $ timestamp     : POSIXct
+#>  - attr(*, "class")= chr "check_result"
+```
+
+Key fields:
+
+- **`flagged_ids`**: character vector of IDs that failed the check
+- **`flag_reason`**: human-readable reason per flagged ID
+- **`severity`**: `"error"` (must fix), `"warning"` (investigate), `"info"` (review)
+- **`summary_stat`**: a list of check-specific statistics (bounds, means, counts)
+
+### 7.2 Accessing flagged IDs
+
+```{r access-flagged}
+# Get flagged IDs
+res$flagged_ids
+#> [1] "HH003"
+
+# Get reasons
+res$flag_reason
+#> [1] "ID 'HH003' appears 2 times"
+
+# Filter original data to flagged records
+flagged_rows <- survey_data[survey_data$hh_id %in% res$flagged_ids, ]
+
+# Check severity
+res$severity
+#> [1] "error"
+
+# Access summary statistics
+res$summary_stat$n_duplicated_groups
+#> [1] 1
+```
+
+### 7.3 Combining results with `bind_check_results()`
+
+Combine multiple `check_result` objects into a single summary tibble:
+
+```{r bind-results}
+res1 <- check_duplicate_ids(survey_data, "hh_id")
+res2 <- check_missing_ids(survey_data, "hh_id")
+res3 <- check_survey_duration(survey_data, "hh_id", "duration_minutes",
+                              min_duration = 15, max_duration = 90)
+
+summary_tbl <- bind_check_results(res1, res2, res3)
+summary_tbl
+#> # A tibble: 3 x 6
+#>   check_name         check_category n_flagged n_total pct_flagged severity
+#>   <chr>              <chr>              <int>   <int>       <dbl> <chr>
+#> 1 A01_duplicate_id   identification         1      10       10    error
+#> 2 A03_missing_id     identification         1      10       10    error
+#> 3 F01_survey_duration timing                 2      10       20    warning
+
+# Also accepts a list of results
+all_results <- list(res1, res2, res3)
+summary_tbl <- bind_check_results(all_results)
+```
+
+### 7.4 Checking and testing
+
+```{r is-check}
+is_check_result(res1)
+#> [1] TRUE
+
+is_check_result(data.frame())
+#> [1] FALSE
+```
+
+## 8. Exporting Results
+
+### 8.1 Excel export (for field supervisors)
+
+`export_to_excel()` creates a professional, multi-sheet workbook:
+
+- **Summary** sheet: one row per check, with conditional formatting (red for
+  errors, yellow for warnings)
+- **Flagged Records** sheet: long-format table of every flagged ID with
+  the check name, reason, and severity
+- **Per-category sheets**: the original data rows for flagged IDs, grouped
+  by check category (Identification, Timing, GPS, etc.)
+
+```{r export-excel}
+report <- run_all_checks(survey_data, "config.yml")
+
+export_to_excel(
+  report = report$results,
+  data = survey_data,
+  id_col = "hh_id",
+  path = "hfc_report_2025-02-04.xlsx"
+)
+#> v Excel report saved to hfc_report_2025-02-04.xlsx
+```
+
+The workbook is ready to share with field supervisors via email or WhatsApp.
+
+### 8.2 CSV export (for data managers and pipelines)
+
+`export_to_csv()` writes two files -- a summary and a flagged-records table --
+suitable for automated pipelines, version control, or database ingestion:
+
+```{r export-csv}
+export_to_csv(
+  report = report$results,
+  output_dir = "output/daily_checks/",
+  prefix = "hfc_2025-02-04"
+)
+#> v Summary written to output/daily_checks/hfc_2025-02-04_summary.csv
+#> v Flagged records written to output/daily_checks/hfc_2025-02-04_flagged.csv
+```
+
+## 9. Back-Check Workflow
+
+Back-checks (a.k.a. spot-checks or re-interviews) involve resurveying a
+subset of households to verify original data. afcestDataCheck supports
+three tiers:
+
+| Tier | Purpose | Method |
+|------|---------|--------|
+| T1 | Verify enumerator visited the household | GPS distance comparison |
+| T2 | Verify key categorical responses match | Exact match on select questions |
+| T3 | Verify key continuous responses are close | Difference within tolerance |
+
+```{r backcheck}
+# Assume you have original and back-check data
+original <- read.csv("data/main_survey.csv")
+backcheck <- read.csv("data/backcheck_survey.csv")
+
+# The orchestrator can accept backcheck_data as a parameter
+report <- run_all_checks(
+  original,
+  config = "config.yml",
+  backcheck_data = backcheck
+)
+```
+
+Back-check configuration is done in the YAML under the `backcheck` section.
+This lets you specify which columns to compare and the acceptable tolerance
+for continuous variables.
+
+## 10. Advanced: Custom Logic Checks
+
+### 10.1 Using `check_custom_logic()` with expressions
+
+The `check_custom_logic()` function accepts any valid R expression as a
+string. The expression is evaluated in the context of the data frame, so
+column names are available directly. Rows where the expression evaluates to
+`TRUE` are flagged as violations:
+
+```{r custom-logic}
+# Flag households where number of children exceeds household size
+check_custom_logic(
+  survey_data, "hh_id",
+  condition_expr = "n_children > hh_size",
+  description = "Number of children exceeds total household size"
+)
+
+# Flag farmers with zero land area but non-zero crop production
+check_custom_logic(
+  survey_data, "hh_id",
+  condition_expr = "is_farmer == 1 & plot_area_ha == 0 & crop_production_kg > 0",
+  description = "Farmer reports zero land but positive crop production"
+)
+
+# Flag implausible yield (kg/ha)
+check_custom_logic(
+  survey_data, "hh_id",
+  condition_expr = "plot_area_ha > 0 & (crop_production_kg / plot_area_ha) > 10000",
+  description = "Crop yield exceeds 10,000 kg/ha (implausible)"
+)
+```
+
+### 10.2 Using custom checks in the config
+
+You can define custom logic checks directly in your YAML config, and the
+orchestrator will run them automatically:
+
+```yaml
+checks:
+  logic:
+    custom:
+      - condition: "n_children > hh_size"
+        description: "Children exceed household size"
+      - condition: "is_farmer == 1 & plot_area_ha == 0 & crop_production_kg > 0"
+        description: "Farmer with zero land but positive production"
+      - condition: "income < 0 & hh_size > 0"
+        description: "Negative income for valid household"
+```
+
+### 10.3 Skip pattern validation
+
+Use `check_skip_pattern()` to validate conditional logic in your
+questionnaire. For example, if a respondent says "no" to owning livestock,
+the livestock count should be NA:
+
+```{r skip-pattern}
+check_skip_pattern(
+  survey_data, "hh_id",
+  parent_col = "has_livestock",
+  child_col = "n_cattle",
+  parent_value = "no",
+  expect_child_na = TRUE
+)
+# Flags records where has_livestock == "no" but n_cattle is NOT NA
+
+# You can also define skip patterns in the config YAML:
+```
+
+```yaml
+skip_patterns:
+  - parent_col: "has_livestock"
+    child_col: "n_cattle"
+    parent_value: "no"
+    expect_child_na: true
+  - parent_col: "is_farmer"
+    child_col: "crop_type"
+    parent_value: 0
+    expect_child_na: true
+```
+
+## 11. Integration with Shiny Dashboards
+
+afcestDataCheck is the data engine behind the AfCEST HFC dashboards. The
+`check_result` and `adc_report` objects are designed to work seamlessly
+in reactive Shiny contexts.
+
+### 11.1 Using results in a Shiny app
+
+```{r shiny-integration}
+library(shiny)
+library(bslib)
+library(afcestDataCheck)
+
+server <- function(input, output, session) {
+
+  # Reactive: run checks when data or config changes
+  report <- reactive({
+    req(input$data_file)
+    data <- read.csv(input$data_file$datapath)
+    run_all_checks(data, "config.yml", verbose = FALSE)
+  })
+
+  # Summary table
+  output$summary_table <- renderTable({
+    summary(report())
+  })
+
+  # Value boxes
+  output$n_checks <- renderText({
+    report()$n_checks_run
+  })
+
+  output$n_flags <- renderText({
+    report()$n_checks_failed
+  })
+
+  # Download Excel report
+  output$download_report <- downloadHandler(
+    filename = function() {
+      paste0("hfc_report_", Sys.Date(), ".xlsx")
+    },
+    content = function(file) {
+      data <- read.csv(input$data_file$datapath)
+      export_to_excel(report()$results, data, "hh_id", file)
+    }
+  )
+}
+```
+
+### 11.2 Accessing individual check results
+
+```{r shiny-individual}
+# In a Shiny server, access individual results from the report
+output$duplicate_details <- renderTable({
+  res <- report()$results[["A01_duplicate_id"]]
+  if (is.null(res)) return(data.frame(message = "Check not run"))
+  data.frame(
+    ID = res$flagged_ids,
+    Reason = res$flag_reason,
+    stringsAsFactors = FALSE
+  )
+})
+```
+
+## Appendix: Check Reference Table
+
+| Code | Function | Category | Severity |
+|------|----------|----------|----------|
+| A.01 | `check_duplicate_ids()` | Identification | error |
+| A.02 | `check_duplicate_fingerprint()` | Identification | error |
+| A.03 | `check_missing_ids()` | Identification | error |
+| A.04 | `check_id_format()` | Identification | error |
+| A.05 | `check_id_in_sample()` | Identification | error |
+| A.06 | `check_consent()` | Metadata | error |
+| A.07 | `check_form_version()` | Metadata | warning |
+| A.09 | `check_interview_completed()` | Metadata | warning |
+| A.10 | `check_survey_tracking()` | Metadata | info |
+| A.12 | `check_respondent_eligibility()` | Metadata | warning |
+| B.01 | `check_enumerator_productivity()` | Enumerator | warning |
+| B.02 | `check_enumerator_duration()` | Enumerator | warning |
+| B.03 | `check_dk_rate()` | Enumerator | warning |
+| B.08 | `check_enumerator_time_gap()` | Enumerator | warning |
+| B.09 | `check_straightlining()` | Enumerator | warning |
+| C.01 | `check_missing_by_variable()` | Completeness | warning/error |
+| C.02 | `check_missing_by_enumerator()` | Completeness | warning |
+| C.03 | `check_skip_pattern()` | Completeness | warning |
+| C.04 | `check_all_missing_variables()` | Completeness | warning |
+| C.07 | `check_roster_completeness()` | Completeness | warning |
+| D.01 | `check_outliers_iqr()` | Outliers | warning |
+| D.02 | `check_outliers_zscore()` | Outliers | warning |
+| D.03 | `check_outliers_mad()` | Outliers | warning |
+| D.04 | `check_hard_range()` | Outliers | error |
+| D.09 | `check_negative_values()` | Outliers | warning |
+| E.01 | `check_gps_boundary()` | GPS | error |
+| E.02 | `check_gps_centroid_distance()` | GPS | warning |
+| E.03 | `check_gps_accuracy()` | GPS | warning |
+| E.04 | `check_gps_duplicates()` | GPS | warning |
+| E.05 | `check_gps_swap()` | GPS | error |
+| E.07 | `check_gps_null_island()` | GPS | error |
+| E.08 | `check_gps_clustering()` | GPS | warning |
+| E.10 | `check_gps_altitude()` | GPS | warning |
+| F.01 | `check_survey_duration()` | Timing | warning |
+| F.02 | `check_collection_window()` | Timing | error |
+| F.03 | `check_future_dates()` | Timing | error |
+| F.04 | `check_survey_end_before_start()` | Timing | error |
+| F.06 | `check_duration_by_hh_size()` | Timing | warning |
+| F.09 | `check_age_date_consistency()` | Logic | warning |
+| G.01 | `check_hh_composition()` | Logic | warning |
+| G.04 | `check_income_expenditure()` | Logic | warning |
+| G.12 | `check_custom_logic()` | Logic | warning |
+| M.01 | `check_benford_first_digit()` | Fabrication | warning |
+| M.02 | `check_benford_second_digit()` | Fabrication | warning |
+| M.03 | `check_digit_preference()` | Fabrication | warning |
+| M.04 | `check_icc_enumerator()` | Fabrication | warning |
+| M.06 | `check_response_entropy()` | Fabrication | warning |
+| M.07 | `check_duplicate_response_patterns()` | Fabrication | error |
+| M.08 | `check_variance_ratio()` | Fabrication | warning |
+| O.01 | `check_other_specify()` | Text Quality | info |
+| O.02 | `check_text_length()` | Text Quality | warning |
+| O.03 | `check_text_duplicates()` | Text Quality | warning |
+| O.04 | `check_name_format()` | Text Quality | warning |
+| O.05 | `check_phone_format()` | Text Quality | warning |

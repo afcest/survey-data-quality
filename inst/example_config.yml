@@ -1,0 +1,94 @@
+# afcestDataCheck project configuration
+# Copy this file and customize for your survey project
+
+project:
+  name: "Example Household Survey"
+  description: "Baseline data collection for rural development project"
+  survey_start: "2025-01-15"
+  survey_end: "2025-03-15"
+  platform: "kobo"  # kobo, surveycto, odk, survey_solutions, cspro, auto
+
+variables:
+  id: "hh_id"
+  enumerator: "enumerator_id"
+  date: "submission_date"
+  start_time: "start"
+  end_time: "end"
+  duration: "duration_minutes"
+  gps: "_geopoint"
+
+  # Optional quasi-identifiers for fingerprint duplicate detection
+  quasi_ids:
+    - "gps_latitude"
+    - "gps_longitude"
+    - "respondent_name"
+    - "phone_number"
+
+checks:
+  identification:
+    duplicate_ids: true
+    fingerprint_duplicates: true
+    missing_ids: true
+    id_in_sample: false  # Set to true and provide sampling_frame path
+
+  completeness:
+    missing_by_variable:
+      enabled: true
+      threshold: 0.05  # Flag variables with >5% missing
+      exclude_cols: ["notes", "comments", "gps_altitude"]
+    missing_by_enumerator:
+      enabled: true
+      threshold_sd: 2
+    all_missing_variables: true
+
+  outliers:
+    method: "iqr"  # iqr, zscore, mad
+    multiplier: 1.5  # For IQR method
+    threshold: 3     # For zscore/mad methods
+    variables:
+      - col: "income"
+        min: 0
+        max: 1000000
+      - col: "household_size"
+        min: 1
+        max: 30
+      - col: "age"
+        min: 0
+        max: 120
+      - col: "plot_area_ha"
+        min: 0
+        max: 500
+
+  enumerator:
+    productivity:
+      max_daily: 10
+    duration:
+      threshold_sd: 2
+    dk_rate:
+      dk_values: ["dk", "don't know", "ne sait pas", "-99", "-88", "-77"]
+      threshold_sd: 2
+    time_gap:
+      min_gap_minutes: 5
+
+  timing:
+    duration:
+      min_minutes: 15
+      max_minutes: 120
+    collection_window: true  # Uses project.survey_start and survey_end
+    future_dates: true
+
+# Optional: sampling frame for ID validation
+# sampling_frame:
+#   path: "data/sampling_frame.csv"
+#   id_col: "hh_id"
+
+# Optional: skip patterns to validate
+# skip_patterns:
+#   - parent_col: "has_livestock"
+#     child_col: "n_cattle"
+#     parent_value: "no"
+#     expect_child_na: true
+#   - parent_col: "is_farmer"
+#     child_col: "crop_type"
+#     parent_value: 0
+#     expect_child_na: true

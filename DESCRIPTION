@@ -1,0 +1,40 @@
+Package: afcestDataCheck
+Title: Survey Data Quality Checks for Development Projects
+Version: 0.3.0
+Authors@R:
+    person("Cedric", "Bationo", , "cedric@afcest.com", role = c("aut", "cre"))
+Description: Comprehensive high-frequency data quality checks for agricultural,
+    health, and socioeconomic surveys. 54 check functions across 10 categories:
+    identification, metadata, completeness, outliers, enumerator performance,
+    timing, GPS validation, fabrication detection, logic consistency, and text
+    quality. Includes orchestrator (run_all_checks), Excel/CSV export, and
+    multi-platform normalizer for KoBoToolbox, SurveyCTO, ODK Central, Survey
+    Solutions, and CSPro.
+License: MIT + file LICENSE
+Encoding: UTF-8
+LazyData: false
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.3.1
+Imports:
+    cli (>= 3.6.0),
+    dplyr (>= 1.1.0),
+    rlang (>= 1.1.0),
+    stats,
+    yaml
+Suggests:
+    DBI,
+    gt,
+    httr2,
+    knitr,
+    openxlsx2,
+    rmarkdown,
+    robotoolbox,
+    RSQLite,
+    rsurveycto,
+    ruODK,
+    sf,
+    SurveySolutionsAPI,
+    testthat (>= 3.0.0),
+    withr
+VignetteBuilder: knitr
+Config/testthat/edition: 3

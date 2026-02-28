@@ -32,8 +32,8 @@ data(survey_sample)
 config <- system.file("example_config.yml", package = "afcestDataCheck")
 report <- run_all_checks(survey_sample, config)
 #> ── afcestDataCheck: Example Household Survey ──
-#> ℹ 100 observations, 11 checks to run
-#> ✔ Done: 11 checks run, 7 with flags, 0 errors
+#> ℹ 100 observations, 39 checks to run
+#> ✔ Done: 39 checks run, 15 with flags, 0 errors
 
 # 3. View results
 print(report)

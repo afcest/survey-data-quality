@@ -246,11 +246,14 @@ summary(report)
 
 ```{r quickstart-export}
 # Export to a formatted Excel workbook
-export_to_excel(report$results, data = survey, id_col = "hh_id",
-                path = "hfc_report.xlsx")
+export_to_excel(report, data = survey, id_col = "hh_id",
+                path = "hfc_report.xlsx",
+                enum_col = "enum_id", date_col = "date")
 
 # Or export to CSV
-export_to_csv(report$results, output_dir = "hfc_output/")
+export_to_csv(report, output_dir = "hfc_output/",
+              data = survey, id_col = "hh_id",
+              enum_col = "enum_id", date_col = "date")
 ```
 
 \newpage
@@ -2318,36 +2321,54 @@ coords
 ## Excel Export
 
 ```{r export-excel}
-export_to_excel(report$results, data = survey, id_col = "hh_id",
-                path = "hfc_report.xlsx")
+export_to_excel(report, data = survey, id_col = "hh_id",
+                path = "hfc_report.xlsx",
+                enum_col = "enum_id", date_col = "date")
 ```
 
-The Excel workbook contains:
+The Excel workbook contains five sheets:
 
 \begin{enumerate}[leftmargin=2cm]
-  \item \textbf{Summary} sheet: Overview with counts by category and
-        severity, colored by severity level (red = error, orange =
-        warning, blue = info).
-  \item \textbf{Per-check sheets}: One sheet per check with flagged
-        IDs, reasons, and relevant data columns. Conditional
-        formatting highlights flagged cells.
-  \item \textbf{Enumerator Summary}: Aggregated error/warning counts
-        per enumerator, sorted by total flags (descending).
+  \item \textbf{Dashboard} sheet: Summary statistics including total
+        observations, date range, flags by category, and enumerator
+        summary.
+  \item \textbf{Flagged Records} sheet: Master list of all flags with
+        columns for row\_number, enumerator, date, id, gps\_lat,
+        gps\_lon, duration, check\_name, check\_category, variable,
+        value, flag\_reason, severity, and action. Severity is
+        color-coded (red = error, orange = warning, blue = info).
+  \item \textbf{Per-category} sheets: One sheet per flagged category
+        with full data rows for flagged IDs, merged with flag details.
+  \item \textbf{Corrections} sheet: Pre-populated template with action
+        dropdown (replace/drop/okay/pending) for data correction
+        workflow.
+  \item \textbf{Enumerator Stats} sheet: Per-enumerator performance
+        metrics including surveys, flags, flag rate, errors, and
+        warnings, sorted by flag rate (descending).
 \end{enumerate}
 
 ## CSV Export
 
 ```{r export-csv}
-export_to_csv(report$results, output_dir = "hfc_output/")
+export_to_csv(report, output_dir = "hfc_output/",
+              data = survey, id_col = "hh_id",
+              enum_col = "enum_id", date_col = "date")
 ```
 
-Generates two files in \texttt{dir}:
+Generates four files in \texttt{output\_dir}:
 
 \begin{itemize}[leftmargin=2cm]
-  \item \texttt{hfc\_summary.csv}: One row per check with name,
-        category, severity, and flag count.
-  \item \texttt{hfc\_flagged.csv}: Long-format table of all flagged
-        observations with ID, check name, reason, and severity.
+  \item \texttt{hfc\_report\_dashboard.csv}: Summary statistics with
+        submissions, data quality metrics, and category breakdowns.
+  \item \texttt{hfc\_report\_flagged\_records.csv}: Long-format table
+        of all flagged observations with row\_number, enumerator,
+        date, ID, GPS coordinates, duration, check name, reason,
+        and severity.
+  \item \texttt{hfc\_report\_corrections\_template.csv}: Pre-populated
+        correction template with id, variable, old\_value, new\_value,
+        action, and reason columns.
+  \item \texttt{hfc\_report\_enumerator\_stats.csv}: Per-enumerator
+        performance metrics.
 \end{itemize}
 
 \newpage

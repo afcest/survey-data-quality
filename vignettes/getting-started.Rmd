@@ -142,13 +142,13 @@ report <- run_all_checks(
 print(report)
 #> -- afcestDataCheck Report: Example Household Survey --
 #> Timestamp: 2025-02-04 14:30:00
-#> Checks run: 12
+#> Checks run: 39
 #> Checks with flags: 8
 #> Check errors: 0
 
 # Get the summary tibble
 summary(report)
-#> # A tibble: 12 x 6
+#> # A tibble: 39 x 6
 #>    check_name            check_category n_flagged n_total pct_flagged severity
 #>    <chr>                 <chr>              <int>   <int>       <dbl> <chr>
 #>  1 A01_duplicate_id      identification         1      10       10    error
@@ -161,20 +161,29 @@ summary(report)
 ```{r export}
 # Export to a styled Excel workbook
 export_to_excel(
-  report$results,
-  survey_data,
+  report,
+  data = survey_data,
   id_col = "hh_id",
-  path = "hfc_report.xlsx"
+  path = "hfc_report.xlsx",
+  enum_col = "enum_id",
+  date_col = "submission_date"
 )
 
 # Export to CSV files
 export_to_csv(
-  report$results,
+  report,
   output_dir = "output/",
-  prefix = "hfc_report"
+  prefix = "hfc_report",
+  data = survey_data,
+  id_col = "hh_id",
+  enum_col = "enum_id",
+  date_col = "submission_date"
 )
-# Creates: output/hfc_report_summary.csv
-#          output/hfc_report_flagged.csv
+# Creates 4 files:
+#   output/hfc_report_dashboard.csv
+#   output/hfc_report_flagged_records.csv
+#   output/hfc_report_corrections_template.csv
+#   output/hfc_report_enumerator_stats.csv
 ```
 
 ## 4. Configuration
@@ -779,24 +788,32 @@ is_check_result(data.frame())
 
 ### 8.1 Excel export (for field supervisors)
 
-`export_to_excel()` creates a professional, multi-sheet workbook:
+`export_to_excel()` creates a professional, multi-sheet workbook with 5 sheets:
 
-- **Summary** sheet: one row per check, with conditional formatting (red for
-  errors, yellow for warnings)
-- **Flagged Records** sheet: long-format table of every flagged ID with
-  the check name, reason, and severity
+- **Dashboard** sheet: summary statistics including total observations, date
+  range, flags by category, and enumerator summary
+- **Flagged Records** sheet: master list of all flags with columns for
+  row_number, enumerator, date, id, gps_lat, gps_lon, duration, check_name,
+  check_category, variable, value, flag_reason, severity, and action.
+  Severity is color-coded (red for errors, orange for warnings, blue for info)
 - **Per-category sheets**: the original data rows for flagged IDs, grouped
   by check category (Identification, Timing, GPS, etc.)
+- **Corrections** sheet: pre-populated template with action dropdown
+  (replace/drop/okay/pending)
+- **Enumerator Stats** sheet: per-enumerator performance with surveys,
+  flags, error rate
 
 ```{r export-excel}
 cfg_path <- system.file("example_config.yml", package = "afcestDataCheck")
 report <- run_all_checks(survey_data, config = cfg_path)
 
 export_to_excel(
-  report = report$results,
+  report = report,
   data = survey_data,
   id_col = "hh_id",
-  path = "hfc_report_2025-02-04.xlsx"
+  path = "hfc_report_2025-02-04.xlsx",
+  enum_col = "enum_id",
+  date_col = "submission_date"
 )
 #> v Excel report saved to hfc_report_2025-02-04.xlsx
 ```
@@ -805,17 +822,24 @@ The workbook is ready to share with field supervisors via email or WhatsApp.
 
 ### 8.2 CSV export (for data managers and pipelines)
 
-`export_to_csv()` writes two files -- a summary and a flagged-records table --
-suitable for automated pipelines, version control, or database ingestion:
+`export_to_csv()` writes four files -- a dashboard, flagged records,
+corrections template, and enumerator stats -- suitable for automated
+pipelines, version control, or database ingestion:
 
 ```{r export-csv}
 export_to_csv(
-  report = report$results,
+  report = report,
   output_dir = "output/daily_checks/",
-  prefix = "hfc_2025-02-04"
+  prefix = "hfc_2025-02-04",
+  data = survey_data,
+  id_col = "hh_id",
+  enum_col = "enum_id",
+  date_col = "submission_date"
 )
-#> v Summary written to output/daily_checks/hfc_2025-02-04_summary.csv
-#> v Flagged records written to output/daily_checks/hfc_2025-02-04_flagged.csv
+#> v Dashboard written to output/daily_checks/hfc_2025-02-04_dashboard.csv
+#> v Flagged records written to output/daily_checks/hfc_2025-02-04_flagged_records.csv
+#> v Corrections template written to output/daily_checks/hfc_2025-02-04_corrections_template.csv
+#> v Enumerator stats written to output/daily_checks/hfc_2025-02-04_enumerator_stats.csv
 ```
 
 ## 9. Back-Check Workflow
@@ -989,7 +1013,7 @@ server <- function(input, output, session) {
     },
     content = function(file) {
       data <- read.csv(input$data_file$datapath)
-      export_to_excel(report()$results, data, "hh_id", file)
+      export_to_excel(report(), data, "hh_id", file)
     }
   )
 }

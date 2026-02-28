@@ -16,12 +16,17 @@
 #'   adds an "Enumerator Stats" sheet.
 #' @param date_col Character. Optional date column name. When provided,
 #'   includes submission dates in the Flagged Records sheet.
+#' @param keep_cols Character vector of additional column names from `data` to
+#'   include in the Flagged Records output (e.g., village name, phone number).
+#'   These columns help field teams identify and locate respondents. Columns
+#'   that do not exist in `data` are silently skipped with a warning.
 #' @param ... Reserved for future use.
 #' @return Invisible path to the created file.
 #' @export
 export_to_excel <- function(report, data = NULL, id_col = NULL,
                             path = file.path(path.expand("~/Downloads"), "hfc_report.xlsx"),
-                            enum_col = NULL, date_col = NULL, ...) {
+                            enum_col = NULL, date_col = NULL,
+                            keep_cols = NULL, ...) {
   if (!requireNamespace("openxlsx2", quietly = TRUE)) {
     cli::cli_abort("Install openxlsx2: {.code install.packages('openxlsx2')}")
   }
@@ -30,7 +35,8 @@ export_to_excel <- function(report, data = NULL, id_col = NULL,
   results <- .extract_results(report)
   summary_tbl <- bind_check_results(results)
   flagged_tbl <- .build_flagged_table_full(results, data, id_col,
-                                            enum_col, date_col)
+                                            enum_col, date_col,
+                                            keep_cols)
 
   # --- Styles ----------------------------------------------------------------
   blue_bg   <- openxlsx2::wb_color("4472C4")
@@ -230,12 +236,17 @@ export_to_excel <- function(report, data = NULL, id_col = NULL,
 #' @param id_col Character. ID column name.
 #' @param enum_col Character. Optional enumerator column name.
 #' @param date_col Character. Optional date column name.
+#' @param keep_cols Character vector of additional column names from `data` to
+#'   include in the Flagged Records output (e.g., village name, phone number).
+#'   These columns help field teams identify and locate respondents. Columns
+#'   that do not exist in `data` are silently skipped with a warning.
 #' @param ... Reserved for future use.
 #' @return Invisible list of file paths created.
 #' @export
 export_to_csv <- function(report, output_dir, prefix = "hfc_report",
                           data = NULL, id_col = NULL,
-                          enum_col = NULL, date_col = NULL, ...) {
+                          enum_col = NULL, date_col = NULL,
+                          keep_cols = NULL, ...) {
   if (!dir.exists(output_dir)) {
     dir.create(output_dir, recursive = TRUE)
     cli::cli_alert_info("Created output directory: {.file {output_dir}}")
@@ -244,7 +255,8 @@ export_to_csv <- function(report, output_dir, prefix = "hfc_report",
   results     <- .extract_results(report)
   summary_tbl <- bind_check_results(results)
   flagged_tbl <- .build_flagged_table_full(results, data, id_col,
-                                            enum_col, date_col)
+                                            enum_col, date_col,
+                                            keep_cols)
 
   paths <- list()
 
@@ -314,12 +326,26 @@ export_to_csv <- function(report, output_dir, prefix = "hfc_report",
 
 #' Build the full flagged records table (IPA format)
 #'
-#' Columns: enumerator, date, id, check_name, check_category, variable,
-#' value, flag_reason, severity, action.
+#' Columns: row_number, enumerator, date, id, gps_lat, gps_lon, duration,
+#' any `keep_cols`, check_name, check_category, variable, value,
+#' flag_reason, severity, action.
 #'
+#' @param results List of check_result objects.
+#' @param data Optional original data frame.
+#' @param id_col Character. ID column name in `data`.
+#' @param enum_col Character. Optional enumerator column name.
+#' @param date_col Character. Optional date column name.
+#' @param keep_cols Character vector of additional column names from `data` to
+#'   include in the output. Columns not found in `data` are skipped with a
+#'   warning.
+#' @return A tibble with context columns (row_number, enumerator, date, id,
+#'   gps_lat, gps_lon, duration), any requested keep_cols, and check detail
+#'   columns (check_name, check_category, variable, value, flag_reason,
+#'   severity, action).
 #' @keywords internal
 .build_flagged_table_full <- function(results, data = NULL, id_col = NULL,
-                                      enum_col = NULL, date_col = NULL) {
+                                      enum_col = NULL, date_col = NULL,
+                                      keep_cols = NULL) {
   rows <- lapply(results, function(cr) {
     if (!is_check_result(cr) || cr$n_flagged == 0L) return(NULL)
 
@@ -366,22 +392,30 @@ export_to_csv <- function(report, output_dir, prefix = "hfc_report",
   out <- dplyr::bind_rows(rows)
 
   if (nrow(out) == 0L) {
-    return(dplyr::tibble(
+    empty_tbl <- dplyr::tibble(
       row_number     = integer(),
       enumerator     = character(),
       date           = character(),
       id             = character(),
       gps_lat        = numeric(),
       gps_lon        = numeric(),
-      duration       = numeric(),
-      check_name     = character(),
-      check_category = character(),
-      variable       = character(),
-      value          = character(),
-      flag_reason    = character(),
-      severity       = character(),
-      action         = character()
-    ))
+      duration       = numeric()
+    )
+    # Add keep_cols as empty character columns
+    if (!is.null(keep_cols) && !is.null(data)) {
+      valid_keep <- intersect(keep_cols, names(data))
+      for (kc in valid_keep) {
+        empty_tbl[[kc]] <- character()
+      }
+    }
+    empty_tbl$check_name     <- character()
+    empty_tbl$check_category <- character()
+    empty_tbl$variable       <- character()
+    empty_tbl$value          <- character()
+    empty_tbl$flag_reason    <- character()
+    empty_tbl$severity       <- character()
+    empty_tbl$action         <- character()
+    return(empty_tbl)
   }
 
   # Add enumerator column
@@ -445,12 +479,35 @@ export_to_csv <- function(report, output_dir, prefix = "hfc_report",
   # Empty action column for user to fill
   out$action <- rep(NA_character_, nrow(out))
 
-  # Reorder columns: row_number and context first, then check details
+  # Add keep_cols: extra columns from data for field team identification
+  keep_col_names <- character()
+  if (!is.null(keep_cols) && !is.null(data) && !is.null(id_col) &&
+      id_col %in% names(data) && nrow(out) > 0L) {
+    # Warn about missing columns, then use only valid ones
+    missing_kc <- setdiff(keep_cols, names(data))
+    if (length(missing_kc) > 0L) {
+      cli::cli_warn(
+        "keep_cols not found in data (skipped): {.val {missing_kc}}"
+      )
+    }
+    valid_keep <- intersect(keep_cols, names(data))
+    if (length(valid_keep) > 0L) {
+      ids_lookup <- as_id(data[[id_col]])
+      match_idx <- match(as_id(out$id), ids_lookup)
+      for (kc in valid_keep) {
+        out[[kc]] <- ifelse(is.na(match_idx), NA_character_,
+                            as.character(data[[kc]][match_idx]))
+      }
+      keep_col_names <- valid_keep
+    }
+  }
+
+  # Reorder columns: row_number and context first, keep_cols, then check details
   base_cols <- c("row_number", "enumerator", "date", "id")
   context_cols <- intersect(c("gps_lat", "gps_lon", "duration"), names(out))
   check_cols <- c("check_name", "check_category", "variable", "value",
                   "flag_reason", "severity", "action")
-  col_order <- c(base_cols, context_cols, check_cols)
+  col_order <- c(base_cols, context_cols, keep_col_names, check_cols)
   out <- out[, col_order, drop = FALSE]
 
   out
@@ -709,7 +766,10 @@ export_to_csv <- function(report, output_dir, prefix = "hfc_report",
 #' Build a long-format flagged records table from check results
 #'
 #' @param report A list of check_result objects
-#' @return A tibble with columns: check_name, flagged_id, flag_reason, severity
+#' @return A tibble with columns: check_name, flagged_id, flag_reason,
+#'   severity. This is the simplified version without context columns;
+#'   see [.build_flagged_table_full()] for the IPA-format version with
+#'   row_number, enumerator, date, GPS, duration, and keep_cols.
 #' @keywords internal
 build_flagged_table <- function(report) {
   # Flatten if nested

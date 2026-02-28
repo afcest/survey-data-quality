@@ -185,7 +185,7 @@ test_that("export_to_excel has the expected function signature", {
   expect_true(is.function(export_to_excel))
   fn_args <- names(formals(export_to_excel))
   expect_true(all(c("report", "data", "id_col", "path",
-                     "enum_col", "date_col") %in% fn_args))
+                     "enum_col", "date_col", "keep_cols") %in% fn_args))
 })
 
 test_that("export_to_excel works with adc_report objects", {
@@ -211,4 +211,89 @@ test_that("export_to_excel works with adc_report objects", {
 
   path <- export_to_excel(report, path = tmp_file)
   expect_true(file.exists(path))
+})
+
+# =============================================================================
+# keep_cols
+# =============================================================================
+
+test_that("export_to_excel includes keep_cols in Flagged Records", {
+  skip_if_not_installed("openxlsx2")
+
+  tmp_file <- tempfile(fileext = ".xlsx")
+  on.exit(unlink(tmp_file), add = TRUE)
+
+  results <- make_test_results()
+  test_data <- make_test_data()
+  test_data$village <- paste0("Village_", seq_len(nrow(test_data)))
+  test_data$phone   <- paste0("077000000", seq_len(nrow(test_data)))
+
+  path <- export_to_excel(results, data = test_data, id_col = "id",
+                          path = tmp_file, enum_col = "enum_id",
+                          date_col = "sub_date",
+                          keep_cols = c("village", "phone"))
+
+  wb <- openxlsx2::wb_load(tmp_file)
+  flagged <- openxlsx2::wb_to_df(wb, sheet = "Flagged Records")
+  expect_true("village" %in% names(flagged))
+  expect_true("phone" %in% names(flagged))
+  # Values should be populated for flagged IDs
+  expect_true(all(!is.na(flagged$village)))
+  expect_true(all(!is.na(flagged$phone)))
+})
+
+test_that("keep_cols warns about missing columns and skips them", {
+  skip_if_not_installed("openxlsx2")
+
+  tmp_file <- tempfile(fileext = ".xlsx")
+  on.exit(unlink(tmp_file), add = TRUE)
+
+  results <- make_test_results()
+  test_data <- make_test_data()
+  test_data$village <- paste0("V", seq_len(nrow(test_data)))
+
+  expect_warning(
+    export_to_excel(results, data = test_data, id_col = "id",
+                    path = tmp_file,
+                    keep_cols = c("village", "nonexistent_col")),
+    "nonexistent_col"
+  )
+
+  wb <- openxlsx2::wb_load(tmp_file)
+  flagged <- openxlsx2::wb_to_df(wb, sheet = "Flagged Records")
+  expect_true("village" %in% names(flagged))
+  expect_false("nonexistent_col" %in% names(flagged))
+})
+
+test_that("export_to_csv includes keep_cols in flagged records", {
+  tmp_dir <- tempfile("csv_keep_")
+  on.exit(unlink(tmp_dir, recursive = TRUE), add = TRUE)
+
+  results <- make_test_results()
+  test_data <- make_test_data()
+  test_data$village <- paste0("V", seq_len(nrow(test_data)))
+
+  paths <- export_to_csv(results, tmp_dir, prefix = "keep_test",
+                         data = test_data, id_col = "id",
+                         keep_cols = c("village"))
+
+  flagged_df <- utils::read.csv(paths$flagged_records, stringsAsFactors = FALSE)
+  expect_true("village" %in% names(flagged_df))
+})
+
+test_that("keep_cols columns appear in empty flagged table", {
+  tmp_dir <- tempfile("csv_keep_empty_")
+  on.exit(unlink(tmp_dir, recursive = TRUE), add = TRUE)
+
+  results <- make_empty_results()
+  test_data <- make_test_data()
+  test_data$village <- paste0("V", seq_len(nrow(test_data)))
+
+  paths <- export_to_csv(results, tmp_dir, prefix = "keep_empty",
+                         data = test_data, id_col = "id",
+                         keep_cols = c("village"))
+
+  flagged_df <- utils::read.csv(paths$flagged_records, stringsAsFactors = FALSE)
+  expect_true("village" %in% names(flagged_df))
+  expect_equal(nrow(flagged_df), 0)
 })

@@ -35,11 +35,26 @@ survey <- data.frame(
   income     = c(50000, 30000, 45000, -500, 80000)
 )
 
-# 2. Run all checks from a YAML config
-report <- run_all_checks(survey, config = "checks_config.yml")
+# 2. Run all checks using the built-in example config
+report <- run_all_checks(survey, config = system.file("example_config.yml", package = "afcestDataCheck"))
 
-# 3. Export results to Excel
-export_to_excel(report$results, survey, id_col = "hh_id", path = "hfc_report.xlsx")
+# Or run without config — just pass data and get individual results
+res <- check_duplicate_ids(survey, id_col = "hh_id")
+print(res)
+#> [x] A01_duplicate_id: 1/5 flagged (error)
+
+# 3. Combine multiple checks
+results <- list(
+  check_duplicate_ids(survey, "hh_id"),
+  check_gps_null_island(survey, "hh_id", "gps_lat", "gps_lon"),
+  check_outliers_iqr(survey, "hh_id", "income"),
+  check_negative_values(survey, "hh_id", "income")
+)
+summary_tbl <- bind_check_results(results)
+print(summary_tbl)
+
+# 4. Export results to Excel (requires openxlsx2)
+export_to_excel(results, survey, id_col = "hh_id", path = "hfc_report.xlsx")
 ```
 
 Or run individual checks directly:
@@ -57,7 +72,7 @@ check_benford_first_digit(survey, id_col = "hh_id", num_col = "income")
 
 ## Check Categories
 
-The package provides **54 check functions** across **10 categories**:
+The package provides **65+ check functions** across **13 categories**:
 
 ### Identification (5 checks)
 Duplicate IDs, fingerprint duplicates (same quasi-identifiers with different IDs), missing IDs, ID format validation against regex patterns, and ID-in-sampling-frame verification.
@@ -88,6 +103,15 @@ Household composition plausibility, income-expenditure ratio, age vs. date-of-bi
 
 ### Text Quality (5 checks)
 "Other (specify)" write-in extraction for recoding, text response length validation, duplicated text detection (copy-paste), name format validation (test values, digits-only, single characters), and phone number format with country code prefix checking.
+
+### Back-Check (5 checks)
+Tier 1 GPS verification (enumerator visited the location), Tier 2 categorical match (key responses match re-interview), Tier 3 continuous tolerance (values within acceptable range), back-check coverage against targets, and per-enumerator error rates.
+
+### Paradata (6 checks)
+Text audit duration analysis, question sequence validation, speed violations (suspiciously fast field completion), field comment extraction, photo attachment verification, and device consistency (same enumerator, different devices).
+
+### Corrections (3 functions)
+Correction log validation (check before applying), correction application with old-value verification and skip logging, and "other (specify)" recoding with a named map.
 
 ## Supported Platforms
 

@@ -22,20 +22,9 @@ checks on survey data. It is designed for field coordinators, data managers,
 and M&E specialists working on agricultural, health, and socioeconomic surveys
 in development projects.
 
-### Why another HFC package?
-
-Several excellent tools exist for high-frequency checks:
-
-| Tool | Language | Checks | Fabrication detection | Multi-platform |
-|------|----------|--------|-----------------------|----------------|
-| `iehfc` (World Bank) | Stata | ~15 | No | Stata-only |
-| `ipacheck` (IPA) | Stata | ~20 | Limited | Stata-only |
-| `HighFrequencyChecks` (UNHCR) | R | ~25 | No | KoBo-focused |
-| **afcestDataCheck** | **R** | **54+** | **Yes (7 methods)** | **5 platforms** |
-
 ### What makes afcestDataCheck different
 
-- **54+ check functions** organized into 10 categories
+- **65+ check functions** organized into 13 categories
 - **Fabrication detection**: Benford's Law (1st and 2nd digit), digit preference,
   intraclass correlation (ICC), variance ratio, response entropy, duplicate
   response patterns, and straightlining
@@ -144,7 +133,10 @@ The most powerful way to use the package is through the orchestrator,
 enabled check:
 
 ```{r run-all}
-report <- run_all_checks(survey_data, "path/to/config.yml")
+report <- run_all_checks(
+  survey_data,
+  config = system.file("example_config.yml", package = "afcestDataCheck")
+)
 
 # Print a summary
 print(report)
@@ -304,7 +296,7 @@ max_daily <- cfg_get(cfg, "checks", "enumerator", "productivity",
 
 ## 5. Check Categories
 
-afcestDataCheck organizes its 54+ checks into 10 categories. Below are
+afcestDataCheck organizes its 65+ checks into 13 categories. Below are
 examples for each.
 
 ### 5.1 Identification
@@ -650,7 +642,7 @@ kobo_data <- read.csv("kobo_export.csv")
 normalized <- normalize_survey_data(kobo_data)
 
 # Run checks using normalized column names in config
-report <- run_all_checks(normalized, "config_kobo.yml")
+report <- run_all_checks(normalized, config = "config_kobo.yml")
 ```
 
 ### 6.4 SurveyCTO workflow
@@ -663,7 +655,7 @@ scto_data <- read.csv("surveycto_export.csv")
 normalized <- normalize_survey_data(scto_data, platform = "surveycto")
 
 # Your config references SurveyCTO column names
-report <- run_all_checks(normalized, "config_scto.yml")
+report <- run_all_checks(normalized, config = "config_scto.yml")
 ```
 
 ### 6.5 ODK Central workflow
@@ -675,7 +667,7 @@ report <- run_all_checks(normalized, "config_scto.yml")
 
 odk_data <- read.csv("odk_export.csv")
 normalized <- normalize_survey_data(odk_data, platform = "odk")
-report <- run_all_checks(normalized, "config_odk.yml")
+report <- run_all_checks(normalized, config = "config_odk.yml")
 ```
 
 ### 6.6 GPS string parsing
@@ -797,7 +789,8 @@ is_check_result(data.frame())
   by check category (Identification, Timing, GPS, etc.)
 
 ```{r export-excel}
-report <- run_all_checks(survey_data, "config.yml")
+cfg_path <- system.file("example_config.yml", package = "afcestDataCheck")
+report <- run_all_checks(survey_data, config = cfg_path)
 
 export_to_excel(
   report = report$results,
@@ -953,7 +946,8 @@ server <- function(input, output, session) {
   report <- reactive({
     req(input$data_file)
     data <- read.csv(input$data_file$datapath)
-    run_all_checks(data, "config.yml", verbose = FALSE)
+    cfg <- system.file("example_config.yml", package = "afcestDataCheck")
+    run_all_checks(data, config = cfg, verbose = FALSE)
   })
 
   # Summary table
@@ -1056,3 +1050,17 @@ output$duplicate_details <- renderTable({
 | O.03 | `check_text_duplicates()` | Text Quality | warning |
 | O.04 | `check_name_format()` | Text Quality | warning |
 | O.05 | `check_phone_format()` | Text Quality | warning |
+| J.01 | `check_backcheck_t1()` | Back-Check | warning |
+| J.02 | `check_backcheck_t2()` | Back-Check | warning |
+| J.03 | `check_backcheck_t3()` | Back-Check | warning |
+| J.04 | `check_backcheck_coverage()` | Back-Check | info |
+| J.06 | `check_backcheck_enumerator()` | Back-Check | warning |
+| N.01 | `check_text_audit_duration()` | Paradata | warning |
+| N.02 | `check_text_audit_sequence()` | Paradata | warning |
+| N.03 | `check_speed_violations()` | Paradata | warning |
+| N.04 | `check_field_comments()` | Paradata | info |
+| N.06 | `check_photo_attachment()` | Paradata | warning |
+| N.08 | `check_device_consistency()` | Paradata | warning |
+| Q.01 | `apply_corrections()` | Corrections | -- |
+| Q.02 | `check_correction_log()` | Corrections | error |
+| Q.03 | `recode_other_specify()` | Corrections | -- |

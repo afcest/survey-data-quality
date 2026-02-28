@@ -1,0 +1,2538 @@
+---
+title: |
+  | \textbf{\Huge afcestDataCheck}
+  | \vspace{0.3cm}
+  | \Large Comprehensive High-Frequency Data Quality Checks
+  | \Large for Survey Research
+  | \vspace{0.5cm}
+  | \large Version 0.3.0
+author: |
+  | Cedric Bationo
+  | African Center for Studies and Training (AfCEST)
+  | \texttt{cedric@afcest.com}
+date: "`r Sys.Date()`"
+output:
+  rmarkdown::pdf_document:
+    toc: true
+    toc_depth: 3
+    number_sections: true
+    fig_caption: true
+    latex_engine: xelatex
+    keep_tex: false
+    includes:
+      in_header: null
+fontsize: 11pt
+geometry: margin=1in
+urlcolor: blue
+linkcolor: darkblue
+header-includes:
+  - \usepackage{booktabs}
+  - \usepackage{longtable}
+  - \usepackage{array}
+  - \usepackage{xcolor}
+  - \usepackage{fancyhdr}
+  - \usepackage{titlesec}
+  - \usepackage{enumitem}
+  - \usepackage{float}
+  - \usepackage{caption}
+  - \definecolor{darkblue}{RGB}{0,51,102}
+  - \definecolor{codebg}{RGB}{245,245,245}
+  - \definecolor{codeframe}{RGB}{200,200,200}
+  - \definecolor{accentgreen}{RGB}{39,119,42}
+  - \pagestyle{fancy}
+  - \fancyhf{}
+  - \fancyhead[L]{\small\textit{afcestDataCheck}}
+  - \fancyhead[R]{\small\textit{Reference Manual}}
+  - \fancyfoot[C]{\thepage}
+  - \renewcommand{\headrulewidth}{0.4pt}
+  - \titleformat{\section}{\Large\bfseries\color{darkblue}}{\thesection}{1em}{}
+  - \titleformat{\subsection}{\large\bfseries\color{darkblue}}{\thesubsection}{1em}{}
+  - \titleformat{\subsubsection}{\normalsize\bfseries}{\thesubsubsection}{1em}{}
+vignette: >
+  %\VignetteIndexEntry{afcestDataCheck: Comprehensive Reference Manual}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(
+  eval      = FALSE,
+  echo      = TRUE,
+  collapse  = TRUE,
+  comment   = "#>",
+  fig.align = "center"
+)
+```
+
+\vspace{1cm}
+
+\begin{abstract}
+\noindent
+\textbf{afcestDataCheck} is an R package providing 65+ automated
+high-frequency data quality check (HFC) functions for survey research
+in international development. The package covers 13 categories of
+checks---from duplicate identification and GPS validation to
+fabrication detection and back-check reconciliation---and supports
+five major data collection platforms (KoBoToolbox, SurveyCTO,
+ODK Central, Survey Solutions, and CSPro). All checks return a
+standardized \texttt{check\_result} object, enabling seamless
+orchestration via YAML-driven configuration files and one-command
+export to formatted Excel workbooks. This vignette serves as the
+authoritative reference manual for the package.
+\end{abstract}
+
+\newpage
+
+# Introduction
+
+## Motivation
+
+Field surveys are the backbone of evidence-based policy in
+international development. Yet data quality problems---duplicate
+records, fabricated responses, GPS anomalies, enumerator
+misconduct---frequently compromise survey integrity. Traditional
+quality assurance relies on ad-hoc Stata do-files or manual spot
+checks, neither of which scales to the volume and velocity of modern
+mobile data collection.
+
+**afcestDataCheck** addresses this gap by providing a
+comprehensive, modular R toolkit for automated high-frequency checks
+(HFCs). The package is designed with three guiding principles:
+
+\begin{enumerate}[leftmargin=2cm]
+  \item \textbf{Completeness.} 65+ check functions organized into
+        13 thematic categories cover the full HFC lifecycle, from
+        sample tracking through back-check reconciliation.
+  \item \textbf{Standardization.} Every check function returns a
+        uniform \texttt{check\_result} list, making it trivial to
+        aggregate, filter, and export results programmatically.
+  \item \textbf{Configurability.} A YAML-driven configuration system
+        lets survey managers define project-specific parameters once
+        and run the entire suite with a single call to
+        \texttt{run\_all\_checks()}.
+\end{enumerate}
+
+## Scope
+
+The package targets development-sector surveys including, but not
+limited to, agricultural production surveys, household expenditure
+surveys, health facility assessments (SDI), and food security
+monitoring (CFSVA, EFSA). It integrates natively with KoBoToolbox,
+SurveyCTO, ODK Central, Survey Solutions, and CSPro through a
+platform-normalization layer.
+
+## How to Read This Manual
+
+Sections 2--4 provide a quick-start guide. Sections 5.1--5.13
+constitute the comprehensive function reference, organized by
+category. Sections 6--10 describe the configuration system,
+orchestrator, platform normalization, and export facilities.
+Section 12 contains the complete function index as a reference
+table.
+
+\newpage
+
+# Installation
+
+## From GitHub (recommended)
+
+```{r install-github}
+# install.packages("pak")
+pak::pak("afcest/afcestDataCheck")
+```
+
+## From source
+
+```{r install-source}
+# Clone the repository, then:
+devtools::install("path/to/survey-data-quality")
+```
+
+## Optional dependencies
+
+Several check functions use optional packages. Install them as
+needed:
+```{r install-optional}
+# Spatial checks (GPS boundary, clustering)
+install.packages("sf")
+
+# Excel export with conditional formatting
+install.packages("openxlsx2")
+
+# Platform API access
+install.packages(c("robotoolbox", "rsurveycto", "ruODK"))
+```
+
+\newpage
+
+# Quick Start
+
+This section demonstrates the core workflow: load data, run checks,
+inspect results, and export.
+
+## Step 1: Create sample data
+
+```{r quickstart-data}
+library(afcestDataCheck)
+
+# Simulated household survey data
+set.seed(42)
+n <- 200
+
+survey <- data.frame(
+  hh_id         = sprintf("HH-%04d", 1:n),
+  enum_id       = sample(paste0("EN", 1:8), n, replace = TRUE),
+  consent       = sample(c(1, 0), n, replace = TRUE, prob = c(0.95, 0.05)),
+  date          = as.Date("2025-06-01") + sample(0:29, n, replace = TRUE),
+  duration_min  = rnorm(n, mean = 45, sd = 15),
+  hh_size       = rpois(n, lambda = 5) + 1,
+  income        = rlnorm(n, meanlog = 12, sdlog = 1),
+  expenditure   = rlnorm(n, meanlog = 11.5, sdlog = 1.2),
+  lat           = runif(n, 12.2, 12.5),
+  lon           = runif(n, -1.6, -1.3),
+  gps_accuracy  = rexp(n, rate = 0.1),
+  form_version  = sample(c("v2.1", "v2.0"), n, replace = TRUE, prob = c(0.9, 0.1)),
+  stringsAsFactors = FALSE
+)
+
+# Inject quality issues for demonstration
+survey$hh_id[5]        <- survey$hh_id[3]       # duplicate ID
+survey$duration_min[10] <- 3                      # too short
+survey$income[15]       <- 1e9                    # extreme outlier
+survey$lat[20]          <- 0                      # null island
+```
+
+## Step 2: Run individual checks
+
+```{r quickstart-individual}
+# Check for duplicate IDs
+res_dup <- check_duplicate_ids(survey, id_col = "hh_id")
+print(res_dup)
+#> -- check_result: duplicate_hh_id ----
+#>   Severity : error
+#>   Flagged  : 2 observation(s)
+#>   IDs      : HH-0003, HH-0003
+
+# Check survey duration
+res_dur <- check_survey_duration(
+  survey, id_col = "hh_id", duration_col = "duration_min",
+  min_duration = 15, max_duration = 120
+)
+print(res_dur)
+
+# Check GPS null island
+res_gps <- check_gps_null_island(
+ survey, id_col = "hh_id", lat_col = "lat", lon_col = "lon"
+)
+print(res_gps)
+```
+
+## Step 3: Run all checks via configuration
+
+```{r quickstart-config}
+# Write a minimal YAML config
+config_text <- "
+project:
+  name: Quick Start Demo
+  id_col: hh_id
+  enum_col: enum_id
+
+variables:
+  date_col: date
+  duration_col: duration_min
+  lat_col: lat
+  lon_col: lon
+  consent_col: consent
+
+checks:
+  identification:
+    duplicate_ids: true
+    missing_ids: true
+  timing:
+    survey_duration:
+      min_duration: 15
+      max_duration: 120
+  gps:
+    gps_null_island: true
+"
+config <- read_config(textConnection(config_text))
+report <- run_all_checks(survey, config = config, verbose = TRUE)
+print(report)
+summary(report)
+```
+
+## Step 4: Export results
+
+```{r quickstart-export}
+# Export to a formatted Excel workbook
+export_to_excel(report, file = "hfc_report.xlsx")
+
+# Or export to CSV
+export_to_csv(report, dir = "hfc_output/")
+```
+
+\newpage
+
+# The `check_result` Object
+
+Before diving into the function reference, it is essential to
+understand the data structure that every check function returns.
+
+## Structure
+
+Every check function returns a named list of class
+\texttt{check\_result} with the following fields:
+
+\begin{table}[H]
+\centering
+\caption{Fields of a \texttt{check\_result} object}
+\begin{tabular}{@{}lll@{}}
+\toprule
+\textbf{Field} & \textbf{Type} & \textbf{Description} \\
+\midrule
+\texttt{check\_name}   & \texttt{character(1)} & Machine-readable check identifier \\
+\texttt{n\_flagged}    & \texttt{integer(1)}   & Number of observations flagged \\
+\texttt{flagged\_ids}  & \texttt{character()}  & Vector of IDs that were flagged \\
+\texttt{flag\_reason}  & \texttt{character()}  & Human-readable reason per flag \\
+\texttt{severity}      & \texttt{character(1)} & One of \texttt{"error"}, \texttt{"warning"}, \texttt{"info"} \\
+\texttt{summary\_stat} & \texttt{list()}       & Check-specific summary statistics \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+## Constructor and helpers
+
+```{r check-result-helpers}
+# Create a check_result manually (used internally)
+res <- new_check_result(
+  check_name   = "my_custom_check",
+  n_flagged    = 3L,
+  flagged_ids  = c("HH-001", "HH-007", "HH-042"),
+  flag_reason  = rep("Custom logic violation", 3),
+  severity     = "warning",
+  summary_stat = list(total_obs = 200, pct_flagged = 1.5)
+)
+
+# Validate
+is_check_result(res)
+#> [1] TRUE
+
+# Pretty print
+print(res)
+
+# Combine multiple results
+combined <- bind_check_results(list(res_dup, res_dur, res_gps))
+```
+
+\newpage
+
+# Function Reference by Category
+
+This section documents every check function in the package,
+organized by thematic category. For each function we provide:
+the full signature with default arguments, a brief description,
+a code example, and notes on the returned \texttt{check\_result}.
+
+## Identification Checks
+
+These checks ensure that survey records can be uniquely and
+correctly identified, and that the sample frame is respected.
+
+### `check_duplicate_ids()`
+
+\vspace{0.2cm}
+
+**Signature:**
+```{r, eval=FALSE}
+check_duplicate_ids(data, id_col)
+```
+
+**Description:** Identifies rows with non-unique values in
+\texttt{id\_col}. All rows sharing a duplicated ID are flagged.
+Severity: \texttt{error}.
+
+**Example:**
+```{r check-dup-ids}
+res <- check_duplicate_ids(survey, id_col = "hh_id")
+res$n_flagged
+#> [1] 2
+res$flagged_ids
+#> [1] "HH-0003" "HH-0003"
+```
+
+**Returns:** \texttt{check\_result} with
+\texttt{check\_name = "duplicate\_hh\_id"}.
+\texttt{summary\_stat} includes the count of unique duplicated
+values.
+
+---
+
+### `check_duplicate_fingerprint()`
+
+\vspace{0.2cm}
+
+**Signature:**
+```{r, eval=FALSE}
+check_duplicate_fingerprint(data, id_col, quasi_ids)
+```
+
+**Description:** Detects near-duplicates by comparing combinations
+of quasi-identifier columns (e.g., name, date of birth, village).
+Even if \texttt{id\_col} values differ, records sharing identical
+quasi-identifiers are flagged. Severity: \texttt{warning}.
+
+**Example:**
+```{r check-dup-fingerprint}
+res <- check_duplicate_fingerprint(
+  survey, id_col = "hh_id",
+  quasi_ids = c("head_name", "village", "hh_size")
+)
+```
+
+**Returns:** \texttt{check\_result} with
+\texttt{check\_name = "duplicate\_fingerprint"}.
+
+---
+
+### `check_missing_ids()`
+
+\vspace{0.2cm}
+
+**Signature:**
+```{r, eval=FALSE}
+check_missing_ids(data, id_col)
+```
+
+**Description:** Flags observations where \texttt{id\_col} is
+\texttt{NA}, empty string, or whitespace-only. Severity:
+\texttt{error}.
+
+**Example:**
+```{r check-missing-ids}
+res <- check_missing_ids(survey, id_col = "hh_id")
+res$n_flagged
+#> [1] 0
+```
+
+---
+
+### `check_id_format()`
+
+\vspace{0.2cm}
+
+**Signature:**
+```{r, eval=FALSE}
+check_id_format(data, id_col, pattern)
+```
+
+**Description:** Validates that every ID matches the supplied
+regular expression \texttt{pattern}. Useful for enforcing
+project-specific ID conventions (e.g., \texttt{"^HH-[0-9]\{4\}$"}).
+Severity: \texttt{warning}.
+
+**Example:**
+```{r check-id-format}
+res <- check_id_format(
+  survey, id_col = "hh_id", pattern = "^HH-[0-9]{4}$"
+)
+```
+
+---
+
+### `check_id_in_sample()`
+
+\vspace{0.2cm}
+
+**Signature:**
+```{r, eval=FALSE}
+check_id_in_sample(data, id_col, sampling_frame)
+```
+
+**Description:** Cross-references collected IDs against the
+pre-defined sampling frame. IDs not found in the frame are flagged
+as potential replacements or unauthorized additions. Severity:
+\texttt{warning}.
+
+**Example:**
+```{r check-id-sample}
+frame <- data.frame(hh_id = sprintf("HH-%04d", 1:250))
+res <- check_id_in_sample(survey, id_col = "hh_id", sampling_frame = frame)
+```
+
+---
+
+## Metadata Checks
+
+These checks validate survey-level metadata such as consent status,
+form versions, completion flags, and respondent eligibility.
+
+### `check_consent()`
+
+\vspace{0.2cm}
+
+**Signature:**
+```{r, eval=FALSE}
+check_consent(data, id_col, consent_col, consent_value = 1)
+```
+
+**Description:** Flags observations where the consent field does
+not equal \texttt{consent\_value}. Records without consent should
+typically be excluded from analysis. Severity: \texttt{error}.
+
+**Example:**
+```{r check-consent}
+res <- check_consent(
+  survey, id_col = "hh_id",
+  consent_col = "consent", consent_value = 1
+)
+```
+
+---
+
+### `check_form_version()`
+
+\vspace{0.2cm}
+
+**Signature:**
+```{r, eval=FALSE}
+check_form_version(data, id_col, version_col, expected_version)
+```
+
+**Description:** Identifies submissions collected with an outdated
+or incorrect form version. Severity: \texttt{warning}.
+
+**Example:**
+```{r check-form-version}
+res <- check_form_version(
+  survey, id_col = "hh_id",
+  version_col = "form_version", expected_version = "v2.1"
+)
+```
+
+---
+
+### `check_interview_completed()`
+
+\vspace{0.2cm}
+
+**Signature:**
+```{r, eval=FALSE}
+check_interview_completed(data, id_col, status_col,
+                          complete_value = "complete")
+```
+
+**Description:** Flags interviews that were not marked as fully
+completed. Severity: \texttt{warning}.
+
+**Example:**
+```{r check-interview-completed}
+res <- check_interview_completed(
+  survey, id_col = "hh_id",
+  status_col = "status", complete_value = "complete"
+)
+```
+
+---
+
+### `check_survey_tracking()`
+
+\vspace{0.2cm}
+
+**Signature:**
+```{r, eval=FALSE}
+check_survey_tracking(data, id_col, stratum_col, target_per_stratum)
+```
+
+**Description:** Compares the number of completed surveys per
+stratum against the sampling targets. Reports under- and
+over-sampling by stratum. Severity: \texttt{info}.
+
+**Example:**
+```{r check-tracking}
+targets <- c(region_A = 50, region_B = 75, region_C = 75)
+res <- check_survey_tracking(
+  survey, id_col = "hh_id",
+  stratum_col = "region", target_per_stratum = targets
+)
+```
+
+**Returns:** \texttt{summary\_stat} includes per-stratum counts,
+targets, and deviations.
+
+---
+
+### `check_respondent_eligibility()`
+
+\vspace{0.2cm}
+
+**Signature:**
+```{r, eval=FALSE}
+check_respondent_eligibility(data, id_col, age_col = NULL,
+                             gender_col = NULL, min_age = 18,
+                             max_age = NULL, eligible_gender = NULL)
+```
+
+**Description:** Validates that respondents meet age and/or gender
+eligibility criteria. Severity: \texttt{warning}.
+
+**Example:**
+```{r check-eligibility}
+res <- check_respondent_eligibility(
+  survey, id_col = "hh_id",
+  age_col = "resp_age", min_age = 18, max_age = 65
+)
+```
+
+---
+
+## Completeness Checks
+
+These functions assess the extent and pattern of missing data at
+the variable, enumerator, and observation levels.
+
+### `check_missing_by_variable()`
+
+\vspace{0.2cm}
+
+**Signature:**
+```{r, eval=FALSE}
+check_missing_by_variable(data, id_col, threshold = 0.05)
+```
+
+**Description:** Computes the proportion of missing values for
+each column. Variables exceeding \texttt{threshold} are flagged.
+Severity: \texttt{warning}.
+
+**Example:**
+```{r check-missing-var}
+res <- check_missing_by_variable(survey, id_col = "hh_id", threshold = 0.05)
+res$summary_stat
+# A list of variable names and their missingness rates
+```
+
+---
+
+### `check_missing_by_enumerator()`
+
+\vspace{0.2cm}
+
+**Signature:**
+```{r, eval=FALSE}
+check_missing_by_enumerator(data, id_col, enum_col, threshold_sd = 2)
+```
+
+**Description:** For each enumerator, computes overall missingness
+rates and flags those whose rate exceeds the group mean by more
+than \texttt{threshold\_sd} standard deviations. Severity:
+\texttt{warning}.
+
+**Example:**
+```{r check-missing-enum}
+res <- check_missing_by_enumerator(
+  survey, id_col = "hh_id", enum_col = "enum_id", threshold_sd = 2
+)
+```
+
+---
+
+### `check_all_missing_variables()`
+
+\vspace{0.2cm}
+
+**Signature:**
+```{r, eval=FALSE}
+check_all_missing_variables(data)
+```
+
+**Description:** Identifies columns where every value is
+\texttt{NA}. These may indicate programming errors in the survey
+instrument. Severity: \texttt{error}.
+
+**Example:**
+```{r check-all-missing}
+res <- check_all_missing_variables(survey)
+```
+
+---
+
+### `check_skip_pattern()`
+
+\vspace{0.2cm}
+
+**Signature:**
+```{r, eval=FALSE}
+check_skip_pattern(data, id_col, parent_col, child_col,
+                   parent_value, expect_child_na = TRUE)
+```
+
+**Description:** Validates skip logic: when \texttt{parent\_col}
+equals \texttt{parent\_value}, the \texttt{child\_col} should be
+\texttt{NA} (if \texttt{expect\_child\_na = TRUE}) or non-missing
+(if \texttt{FALSE}). Severity: \texttt{warning}.
+
+**Example:**
+```{r check-skip}
+res <- check_skip_pattern(
+  survey, id_col = "hh_id",
+  parent_col = "has_livestock", child_col = "n_cattle",
+  parent_value = 0, expect_child_na = TRUE
+)
+```
+
+---
+
+### `check_roster_completeness()`
+
+\vspace{0.2cm}
+
+**Signature:**
+```{r, eval=FALSE}
+check_roster_completeness(data, id_col, hh_size_col, member_count_col)
+```
+
+**Description:** Flags households where the reported household size
+does not match the number of roster entries. Severity:
+\texttt{warning}. Also used in logic consistency checks
+(Section 5.9).
+
+**Example:**
+```{r check-roster}
+res <- check_roster_completeness(
+  survey, id_col = "hh_id",
+  hh_size_col = "hh_size", member_count_col = "n_members"
+)
+```
+
+---
+
+## Outlier Checks
+
+These functions detect extreme or implausible numeric values using
+statistical and rule-based methods.
+
+### `check_outliers_iqr()`
+
+\vspace{0.2cm}
+
+**Signature:**
+```{r, eval=FALSE}
+check_outliers_iqr(data, id_col, num_col, multiplier = 1.5)
+```
+
+**Description:** Flags values outside the interquartile range
+fence: $[Q_1 - k \cdot \text{IQR},\; Q_3 + k \cdot \text{IQR}]$
+where $k$ = \texttt{multiplier}. Severity: \texttt{warning}.
+
+**Example:**
+```{r check-outlier-iqr}
+res <- check_outliers_iqr(
+  survey, id_col = "hh_id", num_col = "income", multiplier = 1.5
+)
+```
+
+**Returns:** \texttt{summary\_stat} includes \texttt{Q1},
+\texttt{Q3}, \texttt{IQR}, \texttt{lower\_fence}, and
+\texttt{upper\_fence}.
+
+---
+
+### `check_outliers_zscore()`
+
+\vspace{0.2cm}
+
+**Signature:**
+```{r, eval=FALSE}
+check_outliers_zscore(data, id_col, num_col, threshold = 3)
+```
+
+**Description:** Flags values with $|z| >$ \texttt{threshold},
+where $z = (x - \bar{x}) / s$. Sensitive to non-normal
+distributions; consider \texttt{check\_outliers\_mad()} for
+skewed data. Severity: \texttt{warning}.
+
+**Example:**
+```{r check-outlier-z}
+res <- check_outliers_zscore(
+  survey, id_col = "hh_id", num_col = "income", threshold = 3
+)
+```
+
+---
+
+### `check_outliers_mad()`
+
+\vspace{0.2cm}
+
+**Signature:**
+```{r, eval=FALSE}
+check_outliers_mad(data, id_col, num_col, threshold = 3)
+```
+
+**Description:** Uses the Median Absolute Deviation (MAD) as a
+robust alternative to the z-score. Flags values where
+$|x - \tilde{x}| / \text{MAD} >$ \texttt{threshold}. Severity:
+\texttt{warning}.
+
+**Example:**
+```{r check-outlier-mad}
+res <- check_outliers_mad(
+  survey, id_col = "hh_id", num_col = "income", threshold = 3
+)
+```
+
+---
+
+### `check_hard_range()`
+
+\vspace{0.2cm}
+
+**Signature:**
+```{r, eval=FALSE}
+check_hard_range(data, id_col, num_col, min_val, max_val)
+```
+
+**Description:** Applies hard-coded minimum and maximum bounds.
+Values outside $[\texttt{min\_val}, \texttt{max\_val}]$ are
+flagged. Severity: \texttt{error}.
+
+**Example:**
+```{r check-hard-range}
+res <- check_hard_range(
+  survey, id_col = "hh_id", num_col = "hh_size",
+  min_val = 1, max_val = 30
+)
+```
+
+---
+
+### `check_negative_values()`
+
+\vspace{0.2cm}
+
+**Signature:**
+```{r, eval=FALSE}
+check_negative_values(data, id_col, num_col)
+```
+
+**Description:** Flags any negative values in a column that should
+contain non-negative quantities (e.g., income, area, count).
+Severity: \texttt{error}.
+
+**Example:**
+```{r check-negative}
+res <- check_negative_values(survey, id_col = "hh_id", num_col = "income")
+```
+
+---
+
+## Enumerator Performance Checks
+
+These functions monitor enumerator behavior to detect low-quality
+or potentially fabricated data collection patterns.
+
+### `check_enumerator_productivity()`
+
+\vspace{0.2cm}
+
+**Signature:**
+```{r, eval=FALSE}
+check_enumerator_productivity(data, id_col, enum_col, date_col,
+                              max_daily = 10)
+```
+
+**Description:** Counts the number of interviews per enumerator
+per day. Flags enumerator-day combinations exceeding
+\texttt{max\_daily}. Severity: \texttt{warning}.
+
+**Example:**
+```{r check-productivity}
+res <- check_enumerator_productivity(
+  survey, id_col = "hh_id", enum_col = "enum_id",
+  date_col = "date", max_daily = 10
+)
+```
+
+---
+
+### `check_enumerator_duration()`
+
+\vspace{0.2cm}
+
+**Signature:**
+```{r, eval=FALSE}
+check_enumerator_duration(data, id_col, enum_col, duration_col,
+                          threshold_sd = 2)
+```
+
+**Description:** Computes mean interview duration per enumerator
+and flags those whose average deviates by more than
+\texttt{threshold\_sd} standard deviations from the overall mean.
+Severity: \texttt{warning}.
+
+**Example:**
+```{r check-enum-duration}
+res <- check_enumerator_duration(
+  survey, id_col = "hh_id", enum_col = "enum_id",
+  duration_col = "duration_min", threshold_sd = 2
+)
+```
+
+---
+
+### `check_dk_rate()`
+
+\vspace{0.2cm}
+
+**Signature:**
+```{r, eval=FALSE}
+check_dk_rate(data, id_col, enum_col,
+              dk_value = c("dk", "don't know", "-99"),
+              threshold_sd = 2)
+```
+
+**Description:** Calculates the rate of "don't know" or refusal
+responses per enumerator across all variables. Enumerators with
+unusually high DK rates may require retraining. Severity:
+\texttt{warning}.
+
+**Example:**
+```{r check-dk-rate}
+res <- check_dk_rate(
+  survey, id_col = "hh_id", enum_col = "enum_id",
+  dk_value = c("dk", "don't know", "-99", "98"),
+  threshold_sd = 2
+)
+```
+
+---
+
+### `check_enumerator_time_gap()`
+
+\vspace{0.2cm}
+
+**Signature:**
+```{r, eval=FALSE}
+check_enumerator_time_gap(data, id_col, enum_col, time_col,
+                          min_gap_minutes = 5)
+```
+
+**Description:** Flags consecutive interviews by the same
+enumerator with a time gap shorter than \texttt{min\_gap\_minutes}.
+An impossibly short gap may indicate fabrication. Severity:
+\texttt{warning}.
+
+**Example:**
+```{r check-time-gap}
+res <- check_enumerator_time_gap(
+  survey, id_col = "hh_id", enum_col = "enum_id",
+  time_col = "start_time", min_gap_minutes = 5
+)
+```
+
+---
+
+### `check_straightlining()`
+
+\vspace{0.2cm}
+
+**Signature:**
+```{r, eval=FALSE}
+check_straightlining(data, id_col, check_cols,
+                     max_identical_rate = 0.8)
+```
+
+**Description:** For each observation, computes the proportion of
+identical responses across the specified columns. Observations
+exceeding \texttt{max\_identical\_rate} are flagged as potential
+straightliners. Severity: \texttt{warning}. Also referenced in
+fabrication detection (Section 5.8).
+
+**Example:**
+```{r check-straightlining}
+likert_cols <- paste0("q_", 1:15)
+res <- check_straightlining(
+  survey, id_col = "hh_id",
+  check_cols = likert_cols, max_identical_rate = 0.8
+)
+```
+
+---
+
+## Timing Checks
+
+These functions validate temporal aspects of data collection,
+including interview duration, date validity, and collection windows.
+
+### `check_survey_duration()`
+
+\vspace{0.2cm}
+
+**Signature:**
+```{r, eval=FALSE}
+check_survey_duration(data, id_col, duration_col,
+                      min_duration = 15, max_duration = 120)
+```
+
+**Description:** Flags interviews whose duration falls outside
+$[\texttt{min\_duration}, \texttt{max\_duration}]$ minutes.
+Severity: \texttt{warning}.
+
+**Example:**
+```{r check-duration}
+res <- check_survey_duration(
+  survey, id_col = "hh_id", duration_col = "duration_min",
+  min_duration = 15, max_duration = 120
+)
+```
+
+---
+
+### `check_collection_window()`
+
+\vspace{0.2cm}
+
+**Signature:**
+```{r, eval=FALSE}
+check_collection_window(data, id_col, date_col,
+                        start_date, end_date)
+```
+
+**Description:** Flags interviews with dates outside the official
+data collection window. Severity: \texttt{warning}.
+
+**Example:**
+```{r check-collection-window}
+res <- check_collection_window(
+  survey, id_col = "hh_id", date_col = "date",
+  start_date = as.Date("2025-06-01"),
+  end_date   = as.Date("2025-06-30")
+)
+```
+
+---
+
+### `check_future_dates()`
+
+\vspace{0.2cm}
+
+**Signature:**
+```{r, eval=FALSE}
+check_future_dates(data, id_col, date_col,
+                   reference_date = Sys.Date())
+```
+
+**Description:** Flags dates that are in the future relative to
+\texttt{reference\_date}. Severity: \texttt{error}.
+
+**Example:**
+```{r check-future-dates}
+res <- check_future_dates(
+  survey, id_col = "hh_id", date_col = "date"
+)
+```
+
+---
+
+### `check_survey_end_before_start()`
+
+\vspace{0.2cm}
+
+**Signature:**
+```{r, eval=FALSE}
+check_survey_end_before_start(data, id_col, start_col, end_col)
+```
+
+**Description:** Flags records where the end timestamp precedes
+the start timestamp. Severity: \texttt{error}. Also referenced
+in logic consistency checks (Section 5.9).
+
+**Example:**
+```{r check-end-before-start}
+res <- check_survey_end_before_start(
+  survey, id_col = "hh_id",
+  start_col = "start_time", end_col = "end_time"
+)
+```
+
+---
+
+### `check_duration_by_hh_size()`
+
+\vspace{0.2cm}
+
+**Signature:**
+```{r, eval=FALSE}
+check_duration_by_hh_size(data, id_col, duration_col,
+                          hh_size_col,
+                          min_minutes_per_member = 3)
+```
+
+**Description:** Flags interviews where the duration is
+implausibly low given household size. The minimum expected
+duration is computed as
+$\texttt{hh\_size} \times \texttt{min\_minutes\_per\_member}$.
+Severity: \texttt{warning}. Also referenced in logic
+consistency checks (Section 5.9).
+
+**Example:**
+```{r check-duration-hhsize}
+res <- check_duration_by_hh_size(
+  survey, id_col = "hh_id",
+  duration_col = "duration_min", hh_size_col = "hh_size",
+  min_minutes_per_member = 3
+)
+```
+
+---
+
+## GPS Validation Checks
+
+These functions validate geographic coordinates for boundary
+compliance, accuracy, duplication, and common GPS artifacts.
+
+### `check_gps_boundary()`
+
+\vspace{0.2cm}
+
+**Signature:**
+```{r, eval=FALSE}
+check_gps_boundary(data, id_col, lat_col, lon_col,
+                   boundary_bbox = NULL, boundary_sf = NULL)
+```
+
+**Description:** Flags GPS coordinates that fall outside the study
+area boundary. The boundary can be specified as a bounding box
+(named numeric vector: \texttt{xmin, ymin, xmax, ymax}) or an
+\texttt{sf} polygon object. Severity: \texttt{error}.
+
+**Example:**
+```{r check-gps-boundary}
+bbox <- c(xmin = -1.7, ymin = 12.1, xmax = -1.2, ymax = 12.6)
+res <- check_gps_boundary(
+  survey, id_col = "hh_id",
+  lat_col = "lat", lon_col = "lon",
+  boundary_bbox = bbox
+)
+```
+
+---
+
+### `check_gps_centroid_distance()`
+
+\vspace{0.2cm}
+
+**Signature:**
+```{r, eval=FALSE}
+check_gps_centroid_distance(data, id_col, lat_col, lon_col,
+                            cluster_col, max_distance_km = 10)
+```
+
+**Description:** Computes the distance of each point from its
+cluster centroid and flags points exceeding
+\texttt{max\_distance\_km}. Severity: \texttt{warning}.
+
+**Example:**
+```{r check-gps-centroid}
+res <- check_gps_centroid_distance(
+  survey, id_col = "hh_id",
+  lat_col = "lat", lon_col = "lon",
+  cluster_col = "village", max_distance_km = 10
+)
+```
+
+---
+
+### `check_gps_accuracy()`
+
+\vspace{0.2cm}
+
+**Signature:**
+```{r, eval=FALSE}
+check_gps_accuracy(data, id_col, accuracy_col, max_accuracy = 50)
+```
+
+**Description:** Flags GPS readings with an accuracy value
+(in meters) exceeding \texttt{max\_accuracy}. High accuracy
+values indicate poor satellite reception. Severity:
+\texttt{warning}.
+
+**Example:**
+```{r check-gps-accuracy}
+res <- check_gps_accuracy(
+  survey, id_col = "hh_id",
+  accuracy_col = "gps_accuracy", max_accuracy = 50
+)
+```
+
+---
+
+### `check_gps_duplicates()`
+
+\vspace{0.2cm}
+
+**Signature:**
+```{r, eval=FALSE}
+check_gps_duplicates(data, id_col, lat_col, lon_col,
+                     min_distance = 0.0001)
+```
+
+**Description:** Identifies pairs of records with GPS coordinates
+closer than \texttt{min\_distance} degrees. Duplicate GPS points
+may indicate that an enumerator did not actually travel to the
+household. Severity: \texttt{warning}.
+
+**Example:**
+```{r check-gps-dup}
+res <- check_gps_duplicates(
+  survey, id_col = "hh_id",
+  lat_col = "lat", lon_col = "lon", min_distance = 0.0001
+)
+```
+
+---
+
+### `check_gps_swap()`
+
+\vspace{0.2cm}
+
+**Signature:**
+```{r, eval=FALSE}
+check_gps_swap(data, id_col, lat_col, lon_col, expected_bbox)
+```
+
+**Description:** Detects cases where latitude and longitude appear
+to be swapped, by checking if swapping the values brings the point
+inside the \texttt{expected\_bbox}. Severity: \texttt{error}.
+
+**Example:**
+```{r check-gps-swap}
+bbox <- c(xmin = -1.7, ymin = 12.1, xmax = -1.2, ymax = 12.6)
+res <- check_gps_swap(
+  survey, id_col = "hh_id",
+  lat_col = "lat", lon_col = "lon", expected_bbox = bbox
+)
+```
+
+---
+
+### `check_gps_null_island()`
+
+\vspace{0.2cm}
+
+**Signature:**
+```{r, eval=FALSE}
+check_gps_null_island(data, id_col, lat_col, lon_col,
+                      null_values = c(0, 999, -999))
+```
+
+**Description:** Flags records where latitude or longitude equal
+sentinel null values (0, 999, $-999$, etc.), indicating missing
+or default GPS readings. The coordinates (0, 0) are known as
+``Null Island.'' Severity: \texttt{error}.
+
+**Example:**
+```{r check-gps-null}
+res <- check_gps_null_island(
+  survey, id_col = "hh_id",
+  lat_col = "lat", lon_col = "lon",
+  null_values = c(0, 999, -999)
+)
+```
+
+---
+
+### `check_gps_clustering()`
+
+\vspace{0.2cm}
+
+**Signature:**
+```{r, eval=FALSE}
+check_gps_clustering(data, id_col, lat_col, lon_col,
+                     enum_col, max_same_point = 3)
+```
+
+**Description:** Flags enumerators who report more than
+\texttt{max\_same\_point} interviews at identical GPS coordinates.
+Severity: \texttt{warning}.
+
+**Example:**
+```{r check-gps-cluster}
+res <- check_gps_clustering(
+  survey, id_col = "hh_id",
+  lat_col = "lat", lon_col = "lon",
+  enum_col = "enum_id", max_same_point = 3
+)
+```
+
+---
+
+### `check_gps_altitude()`
+
+\vspace{0.2cm}
+
+**Signature:**
+```{r, eval=FALSE}
+check_gps_altitude(data, id_col, alt_col,
+                   min_alt = -500, max_alt = 6000)
+```
+
+**Description:** Flags implausible altitude readings outside
+$[\texttt{min\_alt}, \texttt{max\_alt}]$ meters. Severity:
+\texttt{warning}.
+
+**Example:**
+```{r check-gps-alt}
+res <- check_gps_altitude(
+  survey, id_col = "hh_id",
+  alt_col = "altitude", min_alt = 0, max_alt = 2000
+)
+```
+
+---
+
+## Fabrication Detection Checks
+
+These advanced statistical checks are designed to detect
+fabricated or manipulated survey data. They rely on mathematical
+properties (Benford's Law, entropy, ICC) that genuine data
+typically exhibits.
+
+### `check_benford_first_digit()`
+
+\vspace{0.2cm}
+
+**Signature:**
+```{r, eval=FALSE}
+check_benford_first_digit(data, id_col, num_col)
+```
+
+**Description:** Tests the distribution of first (leading) digits
+in \texttt{num\_col} against Benford's Law using a chi-squared
+goodness-of-fit test. Significant deviation may suggest data
+fabrication. Severity: \texttt{info}.
+
+**Example:**
+```{r check-benford1}
+res <- check_benford_first_digit(
+  survey, id_col = "hh_id", num_col = "income"
+)
+res$summary_stat$p_value
+```
+
+**Returns:** \texttt{summary\_stat} includes the chi-squared
+statistic, p-value, and observed vs. expected digit frequencies.
+
+---
+
+### `check_benford_second_digit()`
+
+\vspace{0.2cm}
+
+**Signature:**
+```{r, eval=FALSE}
+check_benford_second_digit(data, id_col, num_col)
+```
+
+**Description:** Same as above, but tests the distribution of
+second digits. Severity: \texttt{info}.
+
+**Example:**
+```{r check-benford2}
+res <- check_benford_second_digit(
+  survey, id_col = "hh_id", num_col = "income"
+)
+```
+
+---
+
+### `check_digit_preference()`
+
+\vspace{0.2cm}
+
+**Signature:**
+```{r, eval=FALSE}
+check_digit_preference(data, id_col, num_col)
+```
+
+**Description:** Detects heaping or rounding bias by analyzing the
+distribution of terminal digits. Excessive clustering on 0 or 5
+suggests that respondents or enumerators are rounding values.
+Severity: \texttt{info}.
+
+**Example:**
+```{r check-digit-pref}
+res <- check_digit_preference(
+  survey, id_col = "hh_id", num_col = "income"
+)
+```
+
+---
+
+### `check_icc_enumerator()`
+
+\vspace{0.2cm}
+
+**Signature:**
+```{r, eval=FALSE}
+check_icc_enumerator(data, id_col, enum_col, num_cols,
+                     max_icc = 0.15)
+```
+
+**Description:** Computes the Intra-class Correlation Coefficient
+(ICC) for numeric variables, treating enumerator as the grouping
+factor. A high ICC indicates that more variance is explained by
+enumerator identity than by actual respondent differences, which
+is a hallmark of fabrication. Severity: \texttt{warning}.
+
+**Example:**
+```{r check-icc}
+res <- check_icc_enumerator(
+  survey, id_col = "hh_id", enum_col = "enum_id",
+  num_cols = c("income", "expenditure", "hh_size"),
+  max_icc = 0.15
+)
+```
+
+---
+
+### `check_response_entropy()`
+
+\vspace{0.2cm}
+
+**Signature:**
+```{r, eval=FALSE}
+check_response_entropy(data, id_col, check_cols,
+                       min_entropy_ratio = 0.3)
+```
+
+**Description:** Computes the normalized Shannon entropy for each
+observation across \texttt{check\_cols}. Low entropy indicates
+little variation in responses, suggesting straightlining or
+fabrication. Severity: \texttt{warning}.
+
+**Example:**
+```{r check-entropy}
+res <- check_response_entropy(
+  survey, id_col = "hh_id",
+  check_cols = paste0("q_", 1:20),
+  min_entropy_ratio = 0.3
+)
+```
+
+---
+
+### `check_duplicate_response_patterns()`
+
+\vspace{0.2cm}
+
+**Signature:**
+```{r, eval=FALSE}
+check_duplicate_response_patterns(data, id_col, check_cols,
+                                  similarity_threshold = 0.95)
+```
+
+**Description:** Computes pairwise similarity (proportion of
+identical responses) across observations. Pairs exceeding
+\texttt{similarity\_threshold} are flagged. Severity:
+\texttt{warning}.
+
+**Example:**
+```{r check-dup-patterns}
+res <- check_duplicate_response_patterns(
+  survey, id_col = "hh_id",
+  check_cols = paste0("q_", 1:20),
+  similarity_threshold = 0.95
+)
+```
+
+---
+
+### `check_variance_ratio()`
+
+\vspace{0.2cm}
+
+**Signature:**
+```{r, eval=FALSE}
+check_variance_ratio(data, id_col, enum_col, num_cols,
+                     max_ratio = 2)
+```
+
+**Description:** For each numeric variable, computes the ratio of
+between-enumerator variance to within-enumerator variance.
+Enumerators with ratios exceeding \texttt{max\_ratio} may be
+producing artificially homogeneous data. Severity:
+\texttt{warning}.
+
+**Example:**
+```{r check-var-ratio}
+res <- check_variance_ratio(
+  survey, id_col = "hh_id", enum_col = "enum_id",
+  num_cols = c("income", "expenditure"), max_ratio = 2
+)
+```
+
+---
+
+## Logic Consistency Checks
+
+These functions validate internal consistency between related
+survey variables.
+
+### `check_hh_composition()`
+
+\vspace{0.2cm}
+
+**Signature:**
+```{r, eval=FALSE}
+check_hh_composition(data, id_col, hh_size_col, roster_count_col)
+```
+
+**Description:** Flags households where the reported total
+household size does not match the count of roster members.
+Severity: \texttt{warning}.
+
+**Example:**
+```{r check-hh-comp}
+res <- check_hh_composition(
+  survey, id_col = "hh_id",
+  hh_size_col = "hh_size", roster_count_col = "n_members"
+)
+```
+
+---
+
+### `check_income_expenditure()`
+
+\vspace{0.2cm}
+
+**Signature:**
+```{r, eval=FALSE}
+check_income_expenditure(data, id_col, income_col,
+                         expenditure_col, max_ratio = 5)
+```
+
+**Description:** Flags households where the ratio of income to
+expenditure (or vice versa) exceeds \texttt{max\_ratio}. Extreme
+ratios may indicate data entry errors. Severity: \texttt{warning}.
+
+**Example:**
+```{r check-inc-exp}
+res <- check_income_expenditure(
+  survey, id_col = "hh_id",
+  income_col = "income", expenditure_col = "expenditure",
+  max_ratio = 5
+)
+```
+
+---
+
+### `check_age_date_consistency()`
+
+\vspace{0.2cm}
+
+**Signature:**
+```{r, eval=FALSE}
+check_age_date_consistency(data, id_col, age_col, dob_col,
+                           tolerance_years = 1)
+```
+
+**Description:** Compares reported age against computed age from
+date of birth. Discrepancies exceeding \texttt{tolerance\_years}
+are flagged. Severity: \texttt{warning}.
+
+**Example:**
+```{r check-age-dob}
+res <- check_age_date_consistency(
+  survey, id_col = "hh_id",
+  age_col = "resp_age", dob_col = "resp_dob",
+  tolerance_years = 1
+)
+```
+
+---
+
+### `check_custom_logic()`
+
+\vspace{0.2cm}
+
+**Signature:**
+```{r, eval=FALSE}
+check_custom_logic(data, id_col, condition_expr, description)
+```
+
+**Description:** Evaluates an arbitrary R expression
+(\texttt{condition\_expr}) against the data and flags rows
+where the condition is \texttt{TRUE}. This is the escape hatch
+for project-specific logic checks not covered by built-in
+functions. Severity: \texttt{warning}.
+
+**Example:**
+```{r check-custom-logic}
+res <- check_custom_logic(
+  survey, id_col = "hh_id",
+  condition_expr = quote(hh_size > 15 & income < 50000),
+  description = "Large household with very low income"
+)
+```
+
+\noindent \textit{Note:} The functions
+\texttt{check\_survey\_end\_before\_start()},
+\texttt{check\_duration\_by\_hh\_size()}, and
+\texttt{check\_roster\_completeness()} are also classified as
+logic consistency checks. Their documentation appears in Sections
+5.6 and 5.3, respectively.
+
+---
+
+## Text Quality Checks
+
+These functions validate open-ended text responses, names, phone
+numbers, and ``other (specify)'' fields.
+
+### `check_other_specify()`
+
+\vspace{0.2cm}
+
+**Signature:**
+```{r, eval=FALSE}
+check_other_specify(data, id_col, other_col)
+```
+
+**Description:** Flags ``other (specify)'' responses that are
+empty, too short, or contain placeholder text (e.g., ``xxx'',
+``test'', ``asdf''). Severity: \texttt{warning}.
+
+**Example:**
+```{r check-other-specify}
+res <- check_other_specify(
+  survey, id_col = "hh_id", other_col = "crop_other"
+)
+```
+
+---
+
+### `check_text_length()`
+
+\vspace{0.2cm}
+
+**Signature:**
+```{r, eval=FALSE}
+check_text_length(data, id_col, text_col,
+                  min_length = 3, max_length = 500)
+```
+
+**Description:** Flags text responses shorter than
+\texttt{min\_length} or longer than \texttt{max\_length}
+characters. Severity: \texttt{warning}.
+
+**Example:**
+```{r check-text-length}
+res <- check_text_length(
+  survey, id_col = "hh_id", text_col = "comments",
+  min_length = 3, max_length = 500
+)
+```
+
+---
+
+### `check_text_duplicates()`
+
+\vspace{0.2cm}
+
+**Signature:**
+```{r, eval=FALSE}
+check_text_duplicates(data, id_col, text_col, min_length = 10)
+```
+
+**Description:** Identifies duplicate text responses (after
+trimming and case-folding) that are at least \texttt{min\_length}
+characters long. Identical long-form responses across different
+records may indicate copy-paste fabrication. Severity:
+\texttt{warning}.
+
+**Example:**
+```{r check-text-dup}
+res <- check_text_duplicates(
+  survey, id_col = "hh_id", text_col = "comments",
+  min_length = 10
+)
+```
+
+---
+
+### `check_name_format()`
+
+\vspace{0.2cm}
+
+**Signature:**
+```{r, eval=FALSE}
+check_name_format(data, id_col, name_col)
+```
+
+**Description:** Validates name fields for common issues:
+all-caps, numeric characters, single characters, or known test
+entries. Severity: \texttt{info}.
+
+**Example:**
+```{r check-name-format}
+res <- check_name_format(
+  survey, id_col = "hh_id", name_col = "head_name"
+)
+```
+
+---
+
+### `check_phone_format()`
+
+\vspace{0.2cm}
+
+**Signature:**
+```{r, eval=FALSE}
+check_phone_format(data, id_col, phone_col, country_code,
+                   min_digits = 8, max_digits = 15)
+```
+
+**Description:** Validates phone numbers against country-specific
+formatting rules: correct number of digits, valid prefix, and no
+invalid characters. Severity: \texttt{warning}.
+
+**Example:**
+```{r check-phone-format}
+res <- check_phone_format(
+  survey, id_col = "hh_id", phone_col = "phone",
+  country_code = "BF", min_digits = 8, max_digits = 8
+)
+```
+
+---
+
+## Back-Check Checks
+
+Back-checks (re-interviews of a subsample) are a cornerstone of
+survey quality assurance. These functions compare original and
+back-check data.
+
+### `check_backcheck_t1()`
+
+\vspace{0.2cm}
+
+**Signature:**
+```{r, eval=FALSE}
+check_backcheck_t1(original, backcheck, id_col, lat_col, lon_col,
+                   max_distance_km = 1)
+```
+
+**Description:** Type~1 back-check: verifies that the back-check
+interview occurred at the same location as the original, by
+computing the Haversine distance between GPS coordinates.
+Severity: \texttt{error}.
+
+**Example:**
+```{r check-bc-t1}
+res <- check_backcheck_t1(
+  original = survey, backcheck = bc_data,
+  id_col = "hh_id", lat_col = "lat", lon_col = "lon",
+  max_distance_km = 1
+)
+```
+
+---
+
+### `check_backcheck_t2()`
+
+\vspace{0.2cm}
+
+**Signature:**
+```{r, eval=FALSE}
+check_backcheck_t2(original, backcheck, id_col, compare_cols)
+```
+
+**Description:** Type~2 back-check: compares categorical or
+yes/no responses between original and back-check. Computes
+exact-match agreement rates per variable. Severity:
+\texttt{warning}.
+
+**Example:**
+```{r check-bc-t2}
+res <- check_backcheck_t2(
+  original = survey, backcheck = bc_data,
+  id_col = "hh_id",
+  compare_cols = c("roof_material", "wall_material", "water_source")
+)
+```
+
+---
+
+### `check_backcheck_t3()`
+
+\vspace{0.2cm}
+
+**Signature:**
+```{r, eval=FALSE}
+check_backcheck_t3(original, backcheck, id_col, compare_cols,
+                   tolerance)
+```
+
+**Description:** Type~3 back-check: compares continuous/numeric
+responses with a tolerance band. Discrepancies exceeding
+\texttt{tolerance} (absolute or proportional) are flagged.
+Severity: \texttt{warning}.
+
+**Example:**
+```{r check-bc-t3}
+res <- check_backcheck_t3(
+  original = survey, backcheck = bc_data,
+  id_col = "hh_id",
+  compare_cols = c("hh_size", "n_rooms"),
+  tolerance = c(hh_size = 1, n_rooms = 1)
+)
+```
+
+---
+
+### `check_backcheck_coverage()`
+
+\vspace{0.2cm}
+
+**Signature:**
+```{r, eval=FALSE}
+check_backcheck_coverage(backcheck, id_col, target_n,
+                         stratum_col = NULL,
+                         target_per_stratum = NULL)
+```
+
+**Description:** Assesses whether the back-check sample meets
+coverage targets, overall and per stratum. Severity:
+\texttt{info}.
+
+**Example:**
+```{r check-bc-coverage}
+res <- check_backcheck_coverage(
+  bc_data, id_col = "hh_id", target_n = 30,
+  stratum_col = "region",
+  target_per_stratum = c(region_A = 10, region_B = 10, region_C = 10)
+)
+```
+
+---
+
+### `check_backcheck_enumerator()`
+
+\vspace{0.2cm}
+
+**Signature:**
+```{r, eval=FALSE}
+check_backcheck_enumerator(original, backcheck, id_col, enum_col,
+                           compare_cols, max_error_rate = 0.1)
+```
+
+**Description:** Computes per-enumerator error rates from
+back-check comparisons. Enumerators exceeding
+\texttt{max\_error\_rate} are flagged for review. Severity:
+\texttt{warning}.
+
+**Example:**
+```{r check-bc-enum}
+res <- check_backcheck_enumerator(
+  original = survey, backcheck = bc_data,
+  id_col = "hh_id", enum_col = "enum_id",
+  compare_cols = c("roof_material", "hh_size"),
+  max_error_rate = 0.1
+)
+```
+
+---
+
+## Paradata Checks
+
+Paradata (text audit, server logs, device metadata) provides
+fine-grained quality signals at the question level.
+
+### `check_text_audit_duration()`
+
+\vspace{0.2cm}
+
+**Signature:**
+```{r, eval=FALSE}
+check_text_audit_duration(text_audit, id_col, question_col,
+                          duration_col, min_seconds = 1,
+                          max_seconds = 300)
+```
+
+**Description:** Flags individual question responses with
+implausible durations (too fast or too slow) from text audit
+paradata. Severity: \texttt{warning}.
+
+**Example:**
+```{r check-ta-duration}
+res <- check_text_audit_duration(
+  text_audit, id_col = "hh_id",
+  question_col = "question", duration_col = "duration_sec",
+  min_seconds = 1, max_seconds = 300
+)
+```
+
+---
+
+### `check_text_audit_sequence()`
+
+\vspace{0.2cm}
+
+**Signature:**
+```{r, eval=FALSE}
+check_text_audit_sequence(text_audit, id_col, question_col,
+                          expected_order)
+```
+
+**Description:** Verifies that questions were answered in the
+expected order. Out-of-order responses may indicate form
+manipulation. Severity: \texttt{info}.
+
+**Example:**
+```{r check-ta-sequence}
+expected <- c("consent", "hh_size", "income", "expenditure")
+res <- check_text_audit_sequence(
+  text_audit, id_col = "hh_id",
+  question_col = "question", expected_order = expected
+)
+```
+
+---
+
+### `check_speed_violations()`
+
+\vspace{0.2cm}
+
+**Signature:**
+```{r, eval=FALSE}
+check_speed_violations(text_audit, id_col, question_col,
+                       duration_col, min_seconds_per_field = 0.5)
+```
+
+**Description:** Counts the number of fields answered faster than
+\texttt{min\_seconds\_per\_field}. Interviews with many speed
+violations are flagged. Severity: \texttt{warning}.
+
+**Example:**
+```{r check-speed}
+res <- check_speed_violations(
+  text_audit, id_col = "hh_id",
+  question_col = "question", duration_col = "duration_sec",
+  min_seconds_per_field = 0.5
+)
+```
+
+---
+
+### `check_field_comments()`
+
+\vspace{0.2cm}
+
+**Signature:**
+```{r, eval=FALSE}
+check_field_comments(data, id_col, comment_col)
+```
+
+**Description:** Reports observations that have non-empty
+field-level comments, which may contain corrections, clarifications,
+or flags left by enumerators. Severity: \texttt{info}.
+
+**Example:**
+```{r check-comments}
+res <- check_field_comments(
+  survey, id_col = "hh_id", comment_col = "enumerator_notes"
+)
+```
+
+---
+
+### `check_photo_attachment()`
+
+\vspace{0.2cm}
+
+**Signature:**
+```{r, eval=FALSE}
+check_photo_attachment(data, id_col, photo_col)
+```
+
+**Description:** Flags records where a required photo attachment
+is missing or has an invalid path. Severity: \texttt{warning}.
+
+**Example:**
+```{r check-photo}
+res <- check_photo_attachment(
+  survey, id_col = "hh_id", photo_col = "dwelling_photo"
+)
+```
+
+---
+
+### `check_device_consistency()`
+
+\vspace{0.2cm}
+
+**Signature:**
+```{r, eval=FALSE}
+check_device_consistency(data, id_col, enum_col, device_col)
+```
+
+**Description:** Flags enumerators who used more than one device
+during data collection. While not always problematic, device
+switching may warrant investigation. Severity: \texttt{info}.
+
+**Example:**
+```{r check-device}
+res <- check_device_consistency(
+  survey, id_col = "hh_id",
+  enum_col = "enum_id", device_col = "device_id"
+)
+```
+
+---
+
+## Correction Functions
+
+These functions apply corrections to the dataset based on a
+correction log and recode open-ended responses.
+
+### `apply_corrections()`
+
+\vspace{0.2cm}
+
+**Signature:**
+```{r, eval=FALSE}
+apply_corrections(data, correction_log, id_col, variable_col,
+                  old_value_col, new_value_col)
+```
+
+**Description:** Applies a correction log to the dataset. For
+each row in the log, the function locates the matching record by
+\texttt{id\_col} and variable name, verifies the current value
+matches \texttt{old\_value\_col}, and replaces it with
+\texttt{new\_value\_col}. Returns the corrected dataset along with
+a log of applied and failed corrections.
+
+**Example:**
+```{r apply-corrections}
+corrections <- data.frame(
+  hh_id      = c("HH-0010", "HH-0015"),
+  variable   = c("duration_min", "income"),
+  old_value  = c("3", "1000000000"),
+  new_value  = c("30", "500000"),
+  stringsAsFactors = FALSE
+)
+
+corrected <- apply_corrections(
+  survey, correction_log = corrections,
+  id_col = "hh_id", variable_col = "variable",
+  old_value_col = "old_value", new_value_col = "new_value"
+)
+```
+
+---
+
+### `check_correction_log()`
+
+\vspace{0.2cm}
+
+**Signature:**
+```{r, eval=FALSE}
+check_correction_log(data, correction_log, id_col, variable_col,
+                     old_value_col)
+```
+
+**Description:** Validates a correction log before applying it.
+Checks that all referenced IDs exist, variable names are valid,
+and old values match current data. Returns a \texttt{check\_result}
+with mismatches flagged. Severity: \texttt{error}.
+
+**Example:**
+```{r check-correction-log}
+res <- check_correction_log(
+  survey, correction_log = corrections,
+  id_col = "hh_id", variable_col = "variable",
+  old_value_col = "old_value"
+)
+```
+
+---
+
+### `recode_other_specify()`
+
+\vspace{0.2cm}
+
+**Signature:**
+```{r, eval=FALSE}
+recode_other_specify(data, id_col, other_col, recode_map,
+                     target_col = NULL)
+```
+
+**Description:** Recodes free-text ``other (specify)'' responses
+into existing categories using a named mapping vector. Optionally
+writes recoded values into \texttt{target\_col} (the main
+categorical variable). Returns the recoded dataset.
+
+**Example:**
+```{r recode-other}
+recode_map <- c(
+  "millet"    = "cereals",
+  "sorghum"   = "cereals",
+  "groundnut" = "legumes"
+)
+
+recoded <- recode_other_specify(
+  survey, id_col = "hh_id",
+  other_col = "crop_other", recode_map = recode_map,
+  target_col = "main_crop"
+)
+```
+
+\newpage
+
+# Configuration System
+
+The YAML configuration system allows survey managers to define all
+check parameters in a single file, enabling reproducible and
+auditable quality assurance.
+
+## YAML Structure
+
+A configuration file has three top-level sections:
+
+```{r config-yaml, eval=FALSE}
+# config.yml
+project:
+  name: "Household Survey 2025"
+  id_col: "hh_id"
+  enum_col: "enum_id"
+
+variables:
+  date_col: "interview_date"
+  duration_col: "duration_min"
+  lat_col: "gps_lat"
+  lon_col: "gps_lon"
+  accuracy_col: "gps_accuracy"
+  consent_col: "consent"
+  version_col: "form_version"
+  hh_size_col: "hh_size"
+
+checks:
+  identification:
+    duplicate_ids: true
+    missing_ids: true
+    id_format:
+      pattern: "^HH-[0-9]{4}$"
+
+  metadata:
+    consent:
+      consent_value: 1
+    form_version:
+      expected_version: "v2.1"
+
+  completeness:
+    missing_by_variable:
+      threshold: 0.05
+    missing_by_enumerator:
+      threshold_sd: 2
+
+  outliers:
+    outliers_iqr:
+      columns: ["income", "expenditure", "hh_size"]
+      multiplier: 1.5
+    hard_range:
+      - column: "hh_size"
+        min_val: 1
+        max_val: 30
+      - column: "income"
+        min_val: 0
+        max_val: 50000000
+
+  timing:
+    survey_duration:
+      min_duration: 15
+      max_duration: 120
+    collection_window:
+      start_date: "2025-06-01"
+      end_date: "2025-06-30"
+
+  gps:
+    gps_boundary:
+      boundary_bbox: [-1.7, 12.1, -1.2, 12.6]
+    gps_null_island: true
+    gps_accuracy:
+      max_accuracy: 50
+
+  enumerator:
+    enumerator_productivity:
+      max_daily: 10
+    enumerator_duration:
+      threshold_sd: 2
+
+  fabrication:
+    benford_first_digit:
+      columns: ["income", "expenditure"]
+    icc_enumerator:
+      num_cols: ["income", "expenditure", "hh_size"]
+      max_icc: 0.15
+```
+
+## Configuration Functions
+
+```{r config-functions}
+# Read and validate a YAML config file
+config <- read_config("config.yml")
+
+# Validate config structure
+validate_config(config)
+#> Config validation passed
+
+# Extract a nested value with a default
+id_col <- cfg_get(config, "project", "id_col")
+max_daily <- cfg_get(config, "checks", "enumerator",
+                     "enumerator_productivity", "max_daily",
+                     default = 10)
+```
+
+\newpage
+
+# Orchestrator: `run_all_checks()`
+
+The orchestrator is the primary entry point for running a complete
+suite of checks in a single call.
+
+## Signature
+
+```{r orchestrator-sig, eval=FALSE}
+run_all_checks(
+  data,
+  config,
+  sampling_frame  = NULL,
+  backcheck_data  = NULL,
+  text_audit      = NULL,
+  verbose         = TRUE
+)
+```
+
+## Parameters
+
+\begin{table}[H]
+\centering
+\begin{tabular}{@{}lp{9cm}@{}}
+\toprule
+\textbf{Parameter} & \textbf{Description} \\
+\midrule
+\texttt{data}            & Main survey data frame \\
+\texttt{config}          & A validated configuration list (from \texttt{read\_config()}) \\
+\texttt{sampling\_frame} & Optional data frame for sample-tracking checks \\
+\texttt{backcheck\_data} & Optional back-check data frame \\
+\texttt{text\_audit}     & Optional text audit paradata \\
+\texttt{verbose}         & If \texttt{TRUE}, prints progress messages \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+## Return Value
+
+Returns an object of class \texttt{adc\_report}, which is a named
+list containing:
+
+\begin{itemize}[leftmargin=2cm]
+  \item \texttt{results}: A list of \texttt{check\_result} objects
+  \item \texttt{config}: The configuration used
+  \item \texttt{metadata}: Timestamp, package version, data dimensions
+  \item \texttt{summary}: Aggregated counts by severity and category
+\end{itemize}
+
+## Methods
+
+```{r report-methods}
+report <- run_all_checks(survey, config = config, verbose = TRUE)
+
+# Print overview
+print(report)
+#> === afcestDataCheck Report ===
+#> Data: 200 observations, 12 variables
+#> Checks run: 18
+#> Errors:   3 | Warnings: 12 | Info: 2
+
+# Detailed summary
+summary(report)
+#> Category            Checks  Errors  Warnings  Info
+#> identification         3       1        0       0
+#> metadata               2       1        0       0
+#> completeness           2       0        2       0
+#> outliers               3       0        3       0
+#> ...
+```
+
+\newpage
+
+# Platform Normalization
+
+The package supports data from five major survey platforms by
+normalizing platform-specific conventions into a common format.
+
+## Supported Platforms
+
+\begin{table}[H]
+\centering
+\caption{Supported data collection platforms}
+\begin{tabular}{@{}llll@{}}
+\toprule
+\textbf{Platform} & \textbf{GPS Format} & \textbf{Duration} & \textbf{Metadata Cols} \\
+\midrule
+KoBoToolbox     & String: ``lat lon alt acc''  & Seconds (integer)  & \texttt{\_submission\_time} \\
+SurveyCTO       & String: ``lat lon alt acc''  & Seconds (integer)  & \texttt{starttime, endtime} \\
+ODK Central     & GeoJSON or string            & Seconds            & \texttt{\_\_system/*} \\
+Survey Solutions & Separate lat/lon columns    & Minutes (decimal)  & \texttt{interview\_\_*} \\
+CSPro           & Separate lat/lon columns     & Varies             & \texttt{CAPI\_*} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+## Key Functions
+
+```{r platform-normalize}
+# Auto-detect platform and normalize
+normalized <- normalize_survey_data(
+  raw_data, platform = "auto"
+)
+# Returns data with standardized column names:
+#   .id, .enum_id, .start_time, .end_time, .duration_min,
+#   .lat, .lon, .gps_accuracy, .submission_date
+
+# Parse a GPS string (KoBoToolbox / SurveyCTO format)
+coords <- parse_gps_string("12.345 -1.234 300 5.2")
+coords
+#> $lat
+#> [1] 12.345
+#> $lon
+#> [1] -1.234
+#> $alt
+#> [1] 300
+#> $accuracy
+#> [1] 5.2
+
+# Detect platform from column names (internal)
+# detect_platform(data) -> "kobo" | "scto" | "odk" | "suso" | "cspro"
+```
+
+\newpage
+
+# Export Functions
+
+## Excel Export
+
+```{r export-excel}
+export_to_excel(report, file = "hfc_report.xlsx")
+```
+
+The Excel workbook contains:
+
+\begin{enumerate}[leftmargin=2cm]
+  \item \textbf{Summary} sheet: Overview with counts by category and
+        severity, colored by severity level (red = error, orange =
+        warning, blue = info).
+  \item \textbf{Per-check sheets}: One sheet per check with flagged
+        IDs, reasons, and relevant data columns. Conditional
+        formatting highlights flagged cells.
+  \item \textbf{Enumerator Summary}: Aggregated error/warning counts
+        per enumerator, sorted by total flags (descending).
+\end{enumerate}
+
+## CSV Export
+
+```{r export-csv}
+export_to_csv(report, dir = "hfc_output/")
+```
+
+Generates two files in \texttt{dir}:
+
+\begin{itemize}[leftmargin=2cm]
+  \item \texttt{hfc\_summary.csv}: One row per check with name,
+        category, severity, and flag count.
+  \item \texttt{hfc\_flagged.csv}: Long-format table of all flagged
+        observations with ID, check name, reason, and severity.
+\end{itemize}
+
+\newpage
+
+# Integration with Shiny
+
+The standardized \texttt{check\_result} object integrates
+naturally with Shiny reactive programming. Below is a minimal
+example.
+
+```{r shiny-integration}
+library(shiny)
+library(bslib)
+library(afcestDataCheck)
+
+ui <- page_sidebar(
+  title = "HFC Dashboard",
+  sidebar = sidebar(
+    fileInput("upload", "Upload survey data (.csv)"),
+    actionButton("run", "Run checks", class = "btn-primary")
+  ),
+  card(
+    card_header("Results"),
+    tableOutput("summary_table")
+  ),
+  card(
+    card_header("Flagged Observations"),
+    tableOutput("flagged_table")
+  )
+)
+
+server <- function(input, output, session) {
+  survey_data <- reactive({
+    req(input$upload)
+    read.csv(input$upload$datapath)
+  })
+
+  report <- eventReactive(input$run, {
+    config <- read_config("config.yml")
+    run_all_checks(survey_data(), config = config, verbose = FALSE)
+  })
+
+  output$summary_table <- renderTable({
+    req(report())
+    summary(report())
+  })
+
+  output$flagged_table <- renderTable({
+    req(report())
+    results <- report()$results
+    flagged <- bind_check_results(results)
+    flagged[flagged$n_flagged > 0, ]
+  })
+}
+
+shinyApp(ui, server)
+```
+
+\newpage
+
+# Appendix: Complete Function Index
+
+\small
+
+\begin{longtable}{@{}rllll@{}}
+\caption{Complete function index for \textbf{afcestDataCheck} v0.3.0} \\
+\toprule
+\textbf{\#} & \textbf{Function} & \textbf{Category} & \textbf{Severity} & \textbf{Section} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{\#} & \textbf{Function} & \textbf{Category} & \textbf{Severity} & \textbf{Section} \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+
+ 1 & \texttt{check\_duplicate\_ids}           & Identification   & error   & 5.1 \\
+ 2 & \texttt{check\_duplicate\_fingerprint}    & Identification   & warning & 5.1 \\
+ 3 & \texttt{check\_missing\_ids}              & Identification   & error   & 5.1 \\
+ 4 & \texttt{check\_id\_format}                & Identification   & warning & 5.1 \\
+ 5 & \texttt{check\_id\_in\_sample}            & Identification   & warning & 5.1 \\
+\addlinespace
+ 6 & \texttt{check\_consent}                   & Metadata         & error   & 5.2 \\
+ 7 & \texttt{check\_form\_version}             & Metadata         & warning & 5.2 \\
+ 8 & \texttt{check\_interview\_completed}      & Metadata         & warning & 5.2 \\
+ 9 & \texttt{check\_survey\_tracking}          & Metadata         & info    & 5.2 \\
+10 & \texttt{check\_respondent\_eligibility}   & Metadata         & warning & 5.2 \\
+\addlinespace
+11 & \texttt{check\_missing\_by\_variable}     & Completeness     & warning & 5.3 \\
+12 & \texttt{check\_missing\_by\_enumerator}   & Completeness     & warning & 5.3 \\
+13 & \texttt{check\_all\_missing\_variables}   & Completeness     & error   & 5.3 \\
+14 & \texttt{check\_skip\_pattern}             & Completeness     & warning & 5.3 \\
+15 & \texttt{check\_roster\_completeness}      & Completeness     & warning & 5.3 \\
+\addlinespace
+16 & \texttt{check\_outliers\_iqr}             & Outliers         & warning & 5.4 \\
+17 & \texttt{check\_outliers\_zscore}          & Outliers         & warning & 5.4 \\
+18 & \texttt{check\_outliers\_mad}             & Outliers         & warning & 5.4 \\
+19 & \texttt{check\_hard\_range}               & Outliers         & error   & 5.4 \\
+20 & \texttt{check\_negative\_values}          & Outliers         & error   & 5.4 \\
+\addlinespace
+21 & \texttt{check\_enumerator\_productivity}  & Enumerator       & warning & 5.5 \\
+22 & \texttt{check\_enumerator\_duration}      & Enumerator       & warning & 5.5 \\
+23 & \texttt{check\_dk\_rate}                  & Enumerator       & warning & 5.5 \\
+24 & \texttt{check\_enumerator\_time\_gap}     & Enumerator       & warning & 5.5 \\
+25 & \texttt{check\_straightlining}            & Enumerator       & warning & 5.5 \\
+\addlinespace
+26 & \texttt{check\_survey\_duration}          & Timing           & warning & 5.6 \\
+27 & \texttt{check\_collection\_window}        & Timing           & warning & 5.6 \\
+28 & \texttt{check\_future\_dates}             & Timing           & error   & 5.6 \\
+29 & \texttt{check\_survey\_end\_before\_start}& Timing           & error   & 5.6 \\
+30 & \texttt{check\_duration\_by\_hh\_size}    & Timing           & warning & 5.6 \\
+\addlinespace
+31 & \texttt{check\_gps\_boundary}             & GPS              & error   & 5.7 \\
+32 & \texttt{check\_gps\_centroid\_distance}   & GPS              & warning & 5.7 \\
+33 & \texttt{check\_gps\_accuracy}             & GPS              & warning & 5.7 \\
+34 & \texttt{check\_gps\_duplicates}           & GPS              & warning & 5.7 \\
+35 & \texttt{check\_gps\_swap}                 & GPS              & error   & 5.7 \\
+36 & \texttt{check\_gps\_null\_island}         & GPS              & error   & 5.7 \\
+37 & \texttt{check\_gps\_clustering}           & GPS              & warning & 5.7 \\
+38 & \texttt{check\_gps\_altitude}             & GPS              & warning & 5.7 \\
+\addlinespace
+39 & \texttt{check\_benford\_first\_digit}     & Fabrication      & info    & 5.8 \\
+40 & \texttt{check\_benford\_second\_digit}    & Fabrication      & info    & 5.8 \\
+41 & \texttt{check\_digit\_preference}         & Fabrication      & info    & 5.8 \\
+42 & \texttt{check\_icc\_enumerator}           & Fabrication      & warning & 5.8 \\
+43 & \texttt{check\_response\_entropy}         & Fabrication      & warning & 5.8 \\
+44 & \texttt{check\_duplicate\_response\_patterns} & Fabrication  & warning & 5.8 \\
+45 & \texttt{check\_variance\_ratio}           & Fabrication      & warning & 5.8 \\
+\addlinespace
+46 & \texttt{check\_hh\_composition}           & Logic            & warning & 5.9 \\
+47 & \texttt{check\_income\_expenditure}       & Logic            & warning & 5.9 \\
+48 & \texttt{check\_age\_date\_consistency}    & Logic            & warning & 5.9 \\
+49 & \texttt{check\_custom\_logic}             & Logic            & warning & 5.9 \\
+\addlinespace
+50 & \texttt{check\_other\_specify}            & Text             & warning & 5.10 \\
+51 & \texttt{check\_text\_length}              & Text             & warning & 5.10 \\
+52 & \texttt{check\_text\_duplicates}          & Text             & warning & 5.10 \\
+53 & \texttt{check\_name\_format}              & Text             & info    & 5.10 \\
+54 & \texttt{check\_phone\_format}             & Text             & warning & 5.10 \\
+\addlinespace
+55 & \texttt{check\_backcheck\_t1}             & Back-Check       & error   & 5.11 \\
+56 & \texttt{check\_backcheck\_t2}             & Back-Check       & warning & 5.11 \\
+57 & \texttt{check\_backcheck\_t3}             & Back-Check       & warning & 5.11 \\
+58 & \texttt{check\_backcheck\_coverage}       & Back-Check       & info    & 5.11 \\
+59 & \texttt{check\_backcheck\_enumerator}     & Back-Check       & warning & 5.11 \\
+\addlinespace
+60 & \texttt{check\_text\_audit\_duration}     & Paradata         & warning & 5.12 \\
+61 & \texttt{check\_text\_audit\_sequence}     & Paradata         & info    & 5.12 \\
+62 & \texttt{check\_speed\_violations}         & Paradata         & warning & 5.12 \\
+63 & \texttt{check\_field\_comments}           & Paradata         & info    & 5.12 \\
+64 & \texttt{check\_photo\_attachment}         & Paradata         & warning & 5.12 \\
+65 & \texttt{check\_device\_consistency}       & Paradata         & info    & 5.12 \\
+\addlinespace
+66 & \texttt{apply\_corrections}               & Corrections      & ---     & 5.13 \\
+67 & \texttt{check\_correction\_log}           & Corrections      & error   & 5.13 \\
+68 & \texttt{recode\_other\_specify}           & Corrections      & ---     & 5.13 \\
+\addlinespace
+69 & \texttt{new\_check\_result}               & Infrastructure   & ---     & 4 \\
+70 & \texttt{is\_check\_result}                & Infrastructure   & ---     & 4 \\
+71 & \texttt{bind\_check\_results}             & Infrastructure   & ---     & 4 \\
+72 & \texttt{read\_config}                     & Configuration    & ---     & 6 \\
+73 & \texttt{validate\_config}                 & Configuration    & ---     & 6 \\
+74 & \texttt{cfg\_get}                         & Configuration    & ---     & 6 \\
+75 & \texttt{run\_all\_checks}                 & Orchestrator     & ---     & 8 \\
+76 & \texttt{normalize\_survey\_data}          & Platform         & ---     & 9 \\
+77 & \texttt{parse\_gps\_string}               & Platform         & ---     & 9 \\
+78 & \texttt{export\_to\_excel}                & Export           & ---     & 10 \\
+79 & \texttt{export\_to\_csv}                  & Export           & ---     & 10 \\
+
+\end{longtable}
+
+\normalsize
+
+\vspace{1cm}
+
+\begin{center}
+\rule{0.5\textwidth}{0.4pt}\\[0.5cm]
+\textit{afcestDataCheck} is developed and maintained by\\
+\textbf{AfCEST --- African Center for Studies and Training}\\
+Ouagadougou, Burkina Faso\\[0.3cm]
+\texttt{https://github.com/afcest/afcestDataCheck}
+\end{center}

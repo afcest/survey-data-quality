@@ -4,8 +4,8 @@
 project:
   name: "Example Household Survey"
   description: "Baseline data collection for rural development project"
-  survey_start: "2025-01-15"
-  survey_end: "2025-03-15"
+  survey_start: "2024-01-01"
+  survey_end: "2024-02-28"
   platform: "kobo"  # kobo, surveycto, odk, survey_solutions, cspro, auto
 
 variables:
@@ -17,70 +17,139 @@ variables:
   duration: "duration"
   gps_latitude: "gps_lat"
   gps_longitude: "gps_lon"
+  gps_accuracy: "gps_accuracy"
+  consent: "consent"
+  form_version: "form_version"
+  hh_size: "hh_size"
+  income: "income"
+  expenditure: "expenditure"
+  age: "age_head"
 
   # Optional quasi-identifiers for fingerprint duplicate detection
   quasi_ids:
-    - "gps_latitude"
-    - "gps_longitude"
-    - "respondent_name"
-    - "phone_number"
+    - "name_head"
+    - "phone"
+    - "gps_lat"
+    - "gps_lon"
 
 checks:
+  # ── Identification ──────────────────────────────────────────────────────────
   identification:
     duplicate_ids: true
     fingerprint_duplicates: true
     missing_ids: true
-    id_in_sample: false  # Set to true and provide sampling_frame path
+    id_in_sample: false  # Set to true and provide sampling_frame
+    id_format:
+      enabled: true
+      pattern: "^HH_\\d{4}$"
 
+  # ── Metadata ────────────────────────────────────────────────────────────────
+  metadata:
+    consent:
+      enabled: true
+      consent_value: "yes"
+    form_version:
+      enabled: true
+      expected_version: "v1"
+
+  # ── Completeness ────────────────────────────────────────────────────────────
   completeness:
     missing_by_variable:
       enabled: true
-      threshold: 0.05  # Flag variables with >5% missing
-      exclude_cols: ["notes", "comments", "gps_altitude"]
+      threshold: 0.05
+      exclude_cols: ["comments", "other_crop"]
     missing_by_enumerator:
       enabled: true
       threshold_sd: 2
     all_missing_variables: true
 
+  # ── Outliers ────────────────────────────────────────────────────────────────
   outliers:
-    method: "iqr"  # iqr, zscore, mad
-    multiplier: 1.5  # For IQR method
-    threshold: 3     # For zscore/mad methods
+    method: "iqr"
+    multiplier: 1.5
+    threshold: 3
     variables:
       - col: "income"
         min: 0
-        max: 1000000
+        max: 5000000
+      - col: "yield_kg"
+        min: 0
+        max: 20000
+      - col: "hh_size"
+        min: 1
+        max: 30
 
+  # ── Enumerator Performance ──────────────────────────────────────────────────
   enumerator:
     productivity:
+      enabled: true
       max_daily: 10
     duration:
+      enabled: true
       threshold_sd: 2
     dk_rate:
+      enabled: true
       dk_values: ["dk", "don't know", "ne sait pas", "-99", "-88", "-77"]
       threshold_sd: 2
-    time_gap:
-      min_gap_minutes: 5
 
+  # ── Timing ──────────────────────────────────────────────────────────────────
   timing:
     duration:
       min_minutes: 15
-      max_minutes: 120
-    collection_window: true  # Uses project.survey_start and survey_end
+      max_minutes: 180
+    collection_window: true
     future_dates: true
+    end_before_start: true
+    duration_by_hh_size:
+      enabled: true
+      min_minutes_per_member: 3
+
+  # ── GPS Validation ──────────────────────────────────────────────────────────
+  gps:
+    accuracy:
+      enabled: true
+      max_accuracy: 50
+    duplicates:
+      enabled: true
+      min_distance: 0.0001
+    null_island: true
+    boundary:
+      enabled: true
+      bbox: { xmin: -6.0, xmax: 3.0, ymin: 4.0, ymax: 16.0 }  # West Africa
+    swap:
+      enabled: true
+      expected_bbox: { lat_min: 4.0, lat_max: 16.0, lon_min: -6.0, lon_max: 3.0 }
+    clustering:
+      enabled: true
+      max_same_point: 3
+
+  # ── Fabrication Detection ───────────────────────────────────────────────────
+  fabrication:
+    benford: true
+    digit_preference: true
+    icc:
+      enabled: true
+      max_icc: 0.15
+
+  # ── Logic Consistency ───────────────────────────────────────────────────────
+  logic:
+    hh_composition:
+      enabled: true
+    income_expenditure:
+      enabled: true
+      max_ratio: 5
+
+  # ── Text Quality ────────────────────────────────────────────────────────────
+  # (Text quality checks are run individually, not via orchestrator yet)
+
+# Optional: skip patterns to validate
+skip_patterns:
+  - parent_col: "crop_type"
+    child_col: "other_crop"
+    parent_value: "autre"
+    expect_child_na: false
 
 # Optional: sampling frame for ID validation
 # sampling_frame:
 #   path: "data/sampling_frame.csv"
 #   id_col: "hh_id"
-
-# Optional: skip patterns to validate
-# skip_patterns:
-#   - parent_col: "has_livestock"
-#     child_col: "n_cattle"
-#     parent_value: "no"
-#     expect_child_na: true
-#   - parent_col: "is_farmer"
-#     child_col: "crop_type"
-#     parent_value: 0
-#     expect_child_na: true

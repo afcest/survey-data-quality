@@ -38,12 +38,12 @@ hh_ids[100] <- hh_ids[3]
 enum_probs <- c(0.12, 0.12, 0.40, 0.12, 0.12, 0.12)
 enum_ids <- sample(enumerator_ids, n, replace = TRUE, prob = enum_probs)
 
-# Dates: mostly within the collection window 2025-01-15 to 2025-03-15
-base_dates <- as.Date("2025-01-15") + sample(0:58, n, replace = TRUE)
+# Dates: mostly within the collection window 2024-01-01 to 2024-02-28
+base_dates <- as.Date("2024-01-01") + sample(0:58, n, replace = TRUE)
 # Row 95: future date
 base_dates[95] <- Sys.Date() + 30
 # Row 96: outside collection window (too early)
-base_dates[96] <- as.Date("2024-12-01")
+base_dates[96] <- as.Date("2023-11-01")
 
 # Start/end times
 start_hours <- sample(7:16, n, replace = TRUE)

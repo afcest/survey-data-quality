@@ -10,7 +10,8 @@
 #' @param data Optional original data frame. When provided, category sheets
 #'   include full data rows for flagged records.
 #' @param id_col Character. ID column name in `data`.
-#' @param path Character. Output file path (must end in `.xlsx`).
+#' @param path Character. Output file path (`.xlsx`). Defaults to
+#'   `~/Downloads/hfc_report.xlsx`.
 #' @param enum_col Character. Optional enumerator column name. When provided,
 #'   adds an "Enumerator Stats" sheet.
 #' @param date_col Character. Optional date column name. When provided,
@@ -18,7 +19,8 @@
 #' @param ... Reserved for future use.
 #' @return Invisible path to the created file.
 #' @export
-export_to_excel <- function(report, data = NULL, id_col = NULL, path,
+export_to_excel <- function(report, data = NULL, id_col = NULL,
+                            path = file.path(path.expand("~/Downloads"), "hfc_report.xlsx"),
                             enum_col = NULL, date_col = NULL, ...) {
   if (!requireNamespace("openxlsx2", quietly = TRUE)) {
     cli::cli_abort("Install openxlsx2: {.code install.packages('openxlsx2')}")
@@ -341,14 +343,20 @@ export_to_csv <- function(report, output_dir, prefix = "hfc_report",
       severity       = rep(cr$severity, n)
     )
 
-    # Add value column: attempt to look up the variable value in data
-    if (!is.null(data) && !is.null(id_col) && !is.null(variable) &&
-        variable %in% names(data) && id_col %in% names(data)) {
+    # Add value and row_number columns: look up in original data
+    if (!is.null(data) && !is.null(id_col) && id_col %in% names(data)) {
       ids_lookup <- as_id(data[[id_col]])
       match_idx <- match(as_id(cr$flagged_ids), ids_lookup)
-      out$value <- ifelse(is.na(match_idx), NA_character_,
-                          as.character(data[[variable]][match_idx]))
+      out$row_number <- ifelse(is.na(match_idx), NA_integer_,
+                               as.integer(match_idx))
+      if (!is.null(variable) && variable %in% names(data)) {
+        out$value <- ifelse(is.na(match_idx), NA_character_,
+                            as.character(data[[variable]][match_idx]))
+      } else {
+        out$value <- rep(NA_character_, n)
+      }
     } else {
+      out$row_number <- rep(NA_integer_, n)
       out$value <- rep(NA_character_, n)
     }
 
@@ -359,9 +367,13 @@ export_to_csv <- function(report, output_dir, prefix = "hfc_report",
 
   if (nrow(out) == 0L) {
     return(dplyr::tibble(
+      row_number     = integer(),
       enumerator     = character(),
       date           = character(),
       id             = character(),
+      gps_lat        = numeric(),
+      gps_lon        = numeric(),
+      duration       = numeric(),
       check_name     = character(),
       check_category = character(),
       variable       = character(),
@@ -394,12 +406,51 @@ export_to_csv <- function(report, output_dir, prefix = "hfc_report",
     out$date <- rep(NA_character_, nrow(out))
   }
 
+  # Add GPS coordinates if available
+  lat_col <- NA_character_
+  lon_col <- NA_character_
+  if (!is.null(data)) {
+    # Auto-detect GPS columns
+    lat_candidates <- c("gps_lat", "gps_latitude", "latitude", "lat",
+                        "_geopoint_latitude")
+    lon_candidates <- c("gps_lon", "gps_longitude", "longitude", "lon",
+                        "_geopoint_longitude")
+    found_lat <- intersect(lat_candidates, names(data))
+    found_lon <- intersect(lon_candidates, names(data))
+    if (length(found_lat) > 0) lat_col <- found_lat[1]
+    if (length(found_lon) > 0) lon_col <- found_lon[1]
+  }
+
+  if (!is.na(lat_col) && !is.na(lon_col) && !is.null(id_col) &&
+      !is.null(data) && id_col %in% names(data) && nrow(out) > 0L) {
+    ids_lookup <- as_id(data[[id_col]])
+    match_idx <- match(as_id(out$id), ids_lookup)
+    out$gps_lat <- ifelse(is.na(match_idx), NA_real_,
+                          data[[lat_col]][match_idx])
+    out$gps_lon <- ifelse(is.na(match_idx), NA_real_,
+                          data[[lon_col]][match_idx])
+  }
+
+  # Add duration if available
+  dur_candidates <- c("duration", "duration_minutes", "interview_duration")
+  dur_col <- if (!is.null(data)) intersect(dur_candidates, names(data))[1] else NA_character_
+  if (!is.na(dur_col) && !is.null(id_col) && !is.null(data) &&
+      id_col %in% names(data) && nrow(out) > 0L) {
+    ids_lookup <- as_id(data[[id_col]])
+    match_idx <- match(as_id(out$id), ids_lookup)
+    out$duration <- ifelse(is.na(match_idx), NA_real_,
+                           data[[dur_col]][match_idx])
+  }
+
   # Empty action column for user to fill
   out$action <- rep(NA_character_, nrow(out))
 
-  # Reorder columns to match IPA format
-  col_order <- c("enumerator", "date", "id", "check_name", "check_category",
-                 "variable", "value", "flag_reason", "severity", "action")
+  # Reorder columns: row_number and context first, then check details
+  base_cols <- c("row_number", "enumerator", "date", "id")
+  context_cols <- intersect(c("gps_lat", "gps_lon", "duration"), names(out))
+  check_cols <- c("check_name", "check_category", "variable", "value",
+                  "flag_reason", "severity", "action")
+  col_order <- c(base_cols, context_cols, check_cols)
   out <- out[, col_order, drop = FALSE]
 
   out

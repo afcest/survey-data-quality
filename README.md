@@ -39,10 +39,10 @@ report <- run_all_checks(survey_sample, config)
 print(report)
 summary(report)
 
-# 4. Export to IPA-style Excel workbook
+# 4. Export to IPA-style Excel workbook (saves to ~/Downloads by default)
 export_to_excel(report, data = survey_sample, id_col = "hh_id",
-                path = file.path(tempdir(), "hfc_report.xlsx"),
                 enum_col = "enum_id", date_col = "submission_date")
+#> ✔ Excel report saved to '~/Downloads/hfc_report.xlsx'
 ```
 
 Or run individual checks directly:
@@ -229,13 +229,18 @@ The export system produces professional multi-sheet Excel workbooks matching IPA
 | **Enumerator Stats** | Per-enumerator performance: surveys, flags, error rate |
 
 ```r
-# Full IPA-style Excel workbook
+# Full IPA-style Excel workbook (defaults to ~/Downloads/)
 export_to_excel(report, data = survey_sample, id_col = "hh_id",
-                path = file.path(tempdir(), "hfc_report.xlsx"),
                 enum_col = "enum_id", date_col = "submission_date")
 
+# Or specify a custom path
+export_to_excel(report, data = survey_sample, id_col = "hh_id",
+                path = "output/hfc_report.xlsx",
+                enum_col = "enum_id", date_col = "submission_date",
+                keep_cols = c("name_head", "phone", "crop_type"))
+
 # CSV files (dashboard + flagged records + corrections + enumerator stats)
-export_to_csv(report, output_dir = tempdir(), prefix = "hfc_report",
+export_to_csv(report, output_dir = "output/", prefix = "hfc_report",
               data = survey_sample, id_col = "hh_id", enum_col = "enum_id")
 ```
 

@@ -25,50 +25,64 @@ remotes::install_github("afcest/survey-data-quality")
 ```r
 library(afcestDataCheck)
 
-# 1. Create sample data
-survey <- data.frame(
-  hh_id      = c("HH001", "HH002", "HH002", "HH003", "HH004"),
-  enum_id    = c("E01", "E01", "E02", "E02", "E03"),
-  duration   = c(45, 8, 30, 120, 250),
-  gps_lat    = c(12.37, 12.38, 0, 12.36, 12.39),
-  gps_lon    = c(-1.52, -1.51, 0, -1.50, -1.53),
-  income     = c(50000, 30000, 45000, -500, 80000)
-)
+# 1. Use the bundled sample dataset (100 rows, 22 columns, with planted issues)
+data(survey_sample)
 
 # 2. Run all checks using the built-in example config
-report <- run_all_checks(survey, config = system.file("example_config.yml", package = "afcestDataCheck"))
+config <- system.file("example_config.yml", package = "afcestDataCheck")
+report <- run_all_checks(survey_sample, config)
+#> ── afcestDataCheck: Example Household Survey ──
+#> ℹ 100 observations, 11 checks to run
+#> ✔ Done: 11 checks run, 7 with flags, 0 errors
 
-# Or run without config — just pass data and get individual results
-res <- check_duplicate_ids(survey, id_col = "hh_id")
-print(res)
-#> [x] A01_duplicate_id: 1/5 flagged (error)
+# 3. View results
+print(report)
+summary(report)
 
-# 3. Combine multiple checks
-results <- list(
-  check_duplicate_ids(survey, "hh_id"),
-  check_gps_null_island(survey, "hh_id", "gps_lat", "gps_lon"),
-  check_outliers_iqr(survey, "hh_id", "income"),
-  check_negative_values(survey, "hh_id", "income")
-)
-summary_tbl <- bind_check_results(results)
-print(summary_tbl)
-
-# 4. Export results to Excel (requires openxlsx2)
-export_to_excel(results, survey, id_col = "hh_id", path = "hfc_report.xlsx")
+# 4. Export to IPA-style Excel workbook
+export_to_excel(report, data = survey_sample, id_col = "hh_id",
+                path = file.path(tempdir(), "hfc_report.xlsx"),
+                enum_col = "enum_id", date_col = "submission_date")
 ```
 
 Or run individual checks directly:
 
 ```r
 # Check for duplicate IDs
-check_duplicate_ids(survey, id_col = "hh_id")
+check_duplicate_ids(survey_sample, id_col = "hh_id")
+#> [x] A01_duplicate_id: 3/100 flagged (error)
 
 # Detect GPS null island
-check_gps_null_island(survey, id_col = "hh_id", lat_col = "gps_lat", lon_col = "gps_lon")
+check_gps_null_island(survey_sample, "hh_id", "gps_lat", "gps_lon")
+#> [x] E07_gps_null_island: 1/100 flagged (error)
 
-# Benford's Law test for fabrication
-check_benford_first_digit(survey, id_col = "hh_id", num_col = "income")
+# Combine multiple checks
+results <- list(
+  check_duplicate_ids(survey_sample, "hh_id"),
+  check_gps_null_island(survey_sample, "hh_id", "gps_lat", "gps_lon"),
+  check_outliers_iqr(survey_sample, "hh_id", "income"),
+  check_negative_values(survey_sample, "hh_id", "income")
+)
+bind_check_results(results)
 ```
+
+## Bundled Sample Data
+
+The package ships with three datasets for testing:
+
+| Dataset | Rows | Description |
+|---|---|---|
+| `survey_sample` | 100 | Household survey with 15+ planted quality issues across all 13 categories |
+| `backcheck_sample` | 15 | Back-check re-interview data with intentional mismatches |
+| `corrections_sample` | 5 | Correction log demonstrating the correction workflow |
+
+```r
+data(survey_sample)       # 100 rows, 22 columns
+data(backcheck_sample)    # 15 rows, 9 columns
+data(corrections_sample)  # 5 rows, 5 columns
+```
+
+Planted issues include: duplicate IDs, GPS null island, swapped coordinates, outliers, negative values, implausible household size, future dates, short/long durations, "test" names, invalid phone numbers, and more.
 
 ## Check Categories
 
@@ -202,14 +216,27 @@ list(
 
 This enables programmatic downstream processing, dashboard integration, and automated reporting.
 
-## Export
+## Export (IPA-Style Output)
+
+The export system produces professional multi-sheet Excel workbooks matching IPA's HFC output standard:
+
+| Sheet | Content |
+|---|---|
+| **Dashboard** | Summary statistics: total observations, date range, flags by category |
+| **Flagged Records** | Master list of all flags with severity color-coding (red/orange/blue) |
+| **Per-Category** | One sheet per flagged category with full data rows |
+| **Corrections** | Pre-populated template with action dropdown (replace/drop/okay/pending) |
+| **Enumerator Stats** | Per-enumerator performance: surveys, flags, error rate |
 
 ```r
-# Multi-sheet Excel workbook with conditional formatting
-export_to_excel(report$results, data, id_col = "hh_id", path = "report.xlsx")
+# Full IPA-style Excel workbook
+export_to_excel(report, data = survey_sample, id_col = "hh_id",
+                path = file.path(tempdir(), "hfc_report.xlsx"),
+                enum_col = "enum_id", date_col = "submission_date")
 
-# CSV files (summary + flagged records)
-export_to_csv(report$results, output_dir = "output/", prefix = "hfc_report")
+# CSV files (dashboard + flagged records + corrections + enumerator stats)
+export_to_csv(report, output_dir = tempdir(), prefix = "hfc_report",
+              data = survey_sample, id_col = "hh_id", enum_col = "enum_id")
 ```
 
 ## Contributing

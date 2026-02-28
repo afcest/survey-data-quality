@@ -41,24 +41,35 @@ make_empty_results <- function() {
   )
 }
 
+make_test_data <- function() {
+  data.frame(
+    id        = as.character(1:10),
+    enum_id   = rep(c("E01", "E02"), each = 5),
+    sub_date  = rep("2025-01-20", 10),
+    age       = 20:29,
+    stringsAsFactors = FALSE
+  )
+}
+
 # =============================================================================
 # export_to_csv
 # =============================================================================
 
-test_that("export_to_csv creates summary and flagged CSV files", {
+test_that("export_to_csv creates dashboard and flagged_records CSV files", {
   tmp_dir <- tempfile("csv_test_")
   on.exit(unlink(tmp_dir, recursive = TRUE), add = TRUE)
 
   results <- make_test_results()
   paths <- export_to_csv(results, tmp_dir, prefix = "test_report")
 
-  expect_true(file.exists(paths$summary))
-  expect_true(file.exists(paths$flagged))
+  expect_true(file.exists(paths$dashboard))
+  expect_true(file.exists(paths$flagged_records))
+  expect_true(file.exists(paths$corrections))
 
-  # Check that summary CSV has content
-  summary_df <- utils::read.csv(paths$summary, stringsAsFactors = FALSE)
-  expect_true(nrow(summary_df) > 0)
-  expect_true("check_name" %in% names(summary_df))
+  # Check that dashboard CSV has content
+  dashboard_df <- utils::read.csv(paths$dashboard, stringsAsFactors = FALSE)
+  expect_true(nrow(dashboard_df) > 0)
+  expect_true("Description" %in% names(dashboard_df))
 })
 
 test_that("export_to_csv creates output directory if it does not exist", {
@@ -69,7 +80,7 @@ test_that("export_to_csv creates output directory if it does not exist", {
   paths <- export_to_csv(results, tmp_dir)
 
   expect_true(dir.exists(tmp_dir))
-  expect_true(file.exists(paths$summary))
+  expect_true(file.exists(paths$dashboard))
 })
 
 test_that("export_to_csv handles report with no flags", {
@@ -79,32 +90,45 @@ test_that("export_to_csv handles report with no flags", {
   results <- make_empty_results()
   paths <- export_to_csv(results, tmp_dir, prefix = "empty_report")
 
-  expect_true(file.exists(paths$summary))
-  expect_true(file.exists(paths$flagged))
+  expect_true(file.exists(paths$dashboard))
+  expect_true(file.exists(paths$flagged_records))
 
   # Flagged CSV should have 0 data rows (just header)
-  flagged_df <- utils::read.csv(paths$flagged, stringsAsFactors = FALSE)
+  flagged_df <- utils::read.csv(paths$flagged_records, stringsAsFactors = FALSE)
   expect_equal(nrow(flagged_df), 0)
+})
+
+test_that("export_to_csv includes enumerator stats when enum_col provided", {
+  tmp_dir <- tempfile("csv_enum_")
+  on.exit(unlink(tmp_dir, recursive = TRUE), add = TRUE)
+
+  results <- make_test_results()
+  test_data <- make_test_data()
+  paths <- export_to_csv(results, tmp_dir, prefix = "enum_test",
+                         data = test_data, id_col = "id",
+                         enum_col = "enum_id", date_col = "sub_date")
+
+  expect_true(file.exists(paths$enumerator_stats))
+  enum_df <- utils::read.csv(paths$enumerator_stats, stringsAsFactors = FALSE)
+  expect_true("enumerator" %in% names(enum_df))
+  expect_true("flag_rate" %in% names(enum_df))
 })
 
 # =============================================================================
 # export_to_excel
 # =============================================================================
 
-test_that("export_to_excel creates xlsx file", {
+test_that("export_to_excel creates xlsx file with IPA format sheets", {
   skip_if_not_installed("openxlsx2")
 
   tmp_file <- tempfile(fileext = ".xlsx")
   on.exit(unlink(tmp_file), add = TRUE)
 
   results <- make_test_results()
-  data <- data.frame(
-    id   = as.character(1:10),
-    age  = 20:29,
-    stringsAsFactors = FALSE
-  )
+  data <- make_test_data()
 
-  path <- export_to_excel(results, data, "id", tmp_file)
+  path <- export_to_excel(results, data = data, id_col = "id", path = tmp_file,
+                          enum_col = "enum_id", date_col = "sub_date")
 
   expect_true(file.exists(path))
   expect_equal(path, tmp_file)
@@ -112,14 +136,79 @@ test_that("export_to_excel creates xlsx file", {
   # Verify workbook has expected sheets
   wb <- openxlsx2::wb_load(tmp_file)
   sheet_names <- wb$get_sheet_names()
-  expect_true("Summary" %in% sheet_names)
+  expect_true("Dashboard" %in% sheet_names)
+  expect_true("Flagged Records" %in% sheet_names)
+  expect_true("Corrections" %in% sheet_names)
+  expect_true("Enumerator Stats" %in% sheet_names)
+  # Should have a category sheet for identification (has flags)
+  expect_true("Identification" %in% sheet_names)
+})
+
+test_that("export_to_excel handles empty report gracefully", {
+  skip_if_not_installed("openxlsx2")
+
+  tmp_file <- tempfile(fileext = ".xlsx")
+  on.exit(unlink(tmp_file), add = TRUE)
+
+  results <- make_empty_results()
+  data <- make_test_data()
+
+  path <- export_to_excel(results, data = data, id_col = "id", path = tmp_file)
+
+  expect_true(file.exists(path))
+  wb <- openxlsx2::wb_load(tmp_file)
+  sheet_names <- wb$get_sheet_names()
+  expect_true("Dashboard" %in% sheet_names)
+  expect_true("Flagged Records" %in% sheet_names)
+  expect_true("Corrections" %in% sheet_names)
+})
+
+test_that("export_to_excel works without optional params", {
+  skip_if_not_installed("openxlsx2")
+
+  tmp_file <- tempfile(fileext = ".xlsx")
+  on.exit(unlink(tmp_file), add = TRUE)
+
+  results <- make_test_results()
+
+  # No data, no enum_col, no date_col
+  path <- export_to_excel(results, path = tmp_file)
+
+  expect_true(file.exists(path))
+  wb <- openxlsx2::wb_load(tmp_file)
+  sheet_names <- wb$get_sheet_names()
+  expect_true("Dashboard" %in% sheet_names)
   expect_true("Flagged Records" %in% sheet_names)
 })
 
-test_that("export_to_excel errors without openxlsx2", {
-  # This test is inherently hard to test if openxlsx2 IS installed.
-  # We just verify the function exists and has the expected signature.
+test_that("export_to_excel has the expected function signature", {
   expect_true(is.function(export_to_excel))
   fn_args <- names(formals(export_to_excel))
-  expect_true(all(c("report", "data", "id_col", "path") %in% fn_args))
+  expect_true(all(c("report", "data", "id_col", "path",
+                     "enum_col", "date_col") %in% fn_args))
+})
+
+test_that("export_to_excel works with adc_report objects", {
+  skip_if_not_installed("openxlsx2")
+
+  tmp_file <- tempfile(fileext = ".xlsx")
+  on.exit(unlink(tmp_file), add = TRUE)
+
+  # Build a minimal adc_report
+  results_list <- make_test_results()
+  report <- structure(
+    list(
+      results        = results_list,
+      summary        = bind_check_results(results_list),
+      config         = NULL,
+      n_checks_run   = 2L,
+      n_checks_failed = 1L,
+      errors         = list(),
+      timestamp      = Sys.time()
+    ),
+    class = "adc_report"
+  )
+
+  path <- export_to_excel(report, path = tmp_file)
+  expect_true(file.exists(path))
 })

@@ -4,6 +4,7 @@
 #' @param context Character describing the calling context
 #' @keywords internal
 assert_columns <- function(data, required, context = "check") {
+  stopifnot(is.data.frame(data))
   missing <- setdiff(required, names(data))
   if (length(missing) > 0) {
     cli::cli_abort(c(

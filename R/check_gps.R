@@ -112,26 +112,30 @@ check_gps_duplicates <- function(data, id_col, lat_col, lon_col,
   v_lats <- lats[valid]
   v_lons <- lons[valid]
 
-  # Simple pairwise check for near-duplicates
+  # Vectorized near-duplicate detection: round to min_distance precision
+  # and use duplicated() for O(n) performance
 
-  flagged_set <- character()
-  reasons <- character()
+  rounded_lat <- round(v_lats / min_distance) * min_distance
+  rounded_lon <- round(v_lons / min_distance) * min_distance
+  gps_key <- paste0(rounded_lat, "_", rounded_lon)
 
-  for (i in seq_len(length(v_ids) - 1L)) {
-    for (j in (i + 1L):length(v_ids)) {
-      if (abs(v_lats[i] - v_lats[j]) < min_distance &&
-          abs(v_lons[i] - v_lons[j]) < min_distance) {
-        if (!(v_ids[i] %in% flagged_set)) {
-          flagged_set <- c(flagged_set, v_ids[i])
-          reasons <- c(reasons,
-                       paste0("Near-duplicate GPS with ID ", v_ids[j]))
-        }
-        if (!(v_ids[j] %in% flagged_set)) {
-          flagged_set <- c(flagged_set, v_ids[j])
-          reasons <- c(reasons,
-                       paste0("Near-duplicate GPS with ID ", v_ids[i]))
-        }
-      }
+  # Find all keys that appear more than once
+  dup_forward  <- duplicated(gps_key)
+  dup_backward <- duplicated(gps_key, fromLast = TRUE)
+  is_dup <- dup_forward | dup_backward
+
+  flagged_set <- v_ids[is_dup]
+
+  # Build reason for each flagged ID: list partner IDs sharing the same key
+  reasons <- character(length(flagged_set))
+  if (length(flagged_set) > 0L) {
+    flagged_keys <- gps_key[is_dup]
+    flagged_id_vec <- v_ids[is_dup]
+    key_groups <- split(flagged_id_vec, flagged_keys)
+    for (i in seq_along(flagged_set)) {
+      partners <- setdiff(key_groups[[flagged_keys[i]]], flagged_set[i])
+      reasons[i] <- paste0("Near-duplicate GPS with ID ",
+                            paste(partners, collapse = ", "))
     }
   }
 
@@ -353,23 +357,29 @@ check_gps_centroid_distance <- function(data, id_col, lat_col, lon_col,
     centroid_lon <- stats::setNames(agg_lon$lon, agg_lon$cluster)
   }
 
-  # Compute distance for each valid row
-  flagged_ids_out <- character()
-  flag_reason_out <- character()
+  # Compute distance for each valid row (pre-allocate output vectors)
+  valid_idx <- which(valid)
+  flagged_ids_out <- character(length(valid_idx))
+  flag_reason_out <- character(length(valid_idx))
+  n_flagged_count <- 0L
 
-  for (idx in which(valid)) {
+  for (idx in valid_idx) {
     cl <- as.character(clusters[idx])
     if (!(cl %in% names(centroid_lat))) next
     dist_km <- haversine_km(lats[idx], lons[idx],
                             centroid_lat[[cl]], centroid_lon[[cl]])
     if (dist_km > max_distance_km) {
-      flagged_ids_out <- c(flagged_ids_out, ids[idx])
-      flag_reason_out <- c(flag_reason_out,
-                           paste0(round(dist_km, 2),
-                                  "km from cluster ", cl, " centroid",
-                                  " (max ", max_distance_km, "km)"))
+      n_flagged_count <- n_flagged_count + 1L
+      flagged_ids_out[n_flagged_count] <- ids[idx]
+      flag_reason_out[n_flagged_count] <- paste0(
+        round(dist_km, 2), "km from cluster ", cl, " centroid",
+        " (max ", max_distance_km, "km)")
     }
   }
+
+  # Trim pre-allocated vectors to actual size
+  flagged_ids_out <- flagged_ids_out[seq_len(n_flagged_count)]
+  flag_reason_out <- flag_reason_out[seq_len(n_flagged_count)]
 
   new_check_result(
     check_name     = "E02_gps_centroid_distance",

@@ -23,72 +23,30 @@ export_to_excel <- function(report, data, id_col, path, ...) {
   # --- Create workbook ---
   wb <- openxlsx2::wb_workbook()
 
+  # Helper: header dims string e.g. "A1:F1"
+  make_header_dims <- function(ncols) {
+    paste0("A1:", openxlsx2::int2col(ncols), "1")
+  }
 
   # ---- Sheet 1: Summary ----
   wb$add_worksheet("Summary")
   wb$add_data("Summary", summary_tbl)
 
-  # Header style
-  header_style <- openxlsx2::create_dimen(
-    cols = seq_len(ncol(summary_tbl)),
-    rows = 1
-  )
-  wb$add_font("Summary",
-    dims  = header_style,
-    bold  = TRUE,
-    color = openxlsx2::wb_color("FFFFFF")
-  )
-  wb$add_fill("Summary",
-    dims  = header_style,
-    color = openxlsx2::wb_color("4472C4")
-  )
-
-  # Conditional formatting: severity column
-  sev_col <- which(names(summary_tbl) == "severity")
-  if (length(sev_col) == 1L) {
-    data_rows <- paste0(
-      openxlsx2::int2col(sev_col), 2, ":",
-      openxlsx2::int2col(sev_col), nrow(summary_tbl) + 1
-    )
-    wb$add_conditional_formatting(
-      "Summary",
-      dims = data_rows,
-      rule = '"error"',
-      style = openxlsx2::create_colors_style(
-        font_color = openxlsx2::wb_color("9C0006"),
-        bg_color   = openxlsx2::wb_color("FFC7CE")
-      )
-    )
-    wb$add_conditional_formatting(
-      "Summary",
-      dims = data_rows,
-      rule = '"warning"',
-      style = openxlsx2::create_colors_style(
-        font_color = openxlsx2::wb_color("9C6500"),
-        bg_color   = openxlsx2::wb_color("FFEB9C")
-      )
-    )
-  }
+  hd_sum <- make_header_dims(ncol(summary_tbl))
+  wb$add_font("Summary", dims = hd_sum, bold = TRUE,
+              color = openxlsx2::wb_color("FFFFFF"))
+  wb$add_fill("Summary", dims = hd_sum,
+              color = openxlsx2::wb_color("4472C4"))
 
   # ---- Sheet 2: Flagged Records ----
   wb$add_worksheet("Flagged Records")
   if (nrow(flagged_tbl) > 0) {
     wb$add_data("Flagged Records", flagged_tbl)
-
-    # Header style
-    header_flag <- openxlsx2::create_dimen(
-      cols = seq_len(ncol(flagged_tbl)),
-      rows = 1
-    )
-    wb$add_font("Flagged Records",
-      dims  = header_flag,
-      bold  = TRUE,
-      color = openxlsx2::wb_color("FFFFFF")
-    )
-    wb$add_fill("Flagged Records",
-      dims  = header_flag,
-      color = openxlsx2::wb_color("4472C4")
-    )
+    hd_flag <- make_header_dims(ncol(flagged_tbl))
+    wb$add_font("Flagged Records", dims = hd_flag, bold = TRUE,
+                color = openxlsx2::wb_color("FFFFFF"))
+    wb$add_fill("Flagged Records", dims = hd_flag,
+                color = openxlsx2::wb_color("4472C4"))
   } else {
     wb$add_data("Flagged Records", dplyr::tibble(message = "No flagged records"))
   }
@@ -99,38 +57,25 @@ export_to_excel <- function(report, data, id_col, path, ...) {
   for (cat in categories) {
     sheet_name <- format_sheet_name(cat)
 
-    # Collect flagged IDs for this category
     cat_checks <- Filter(
       function(cr) is_check_result(cr) && cr$check_category == cat,
       report
     )
     cat_flagged_ids <- unique(unlist(lapply(cat_checks, `[[`, "flagged_ids")))
-
     if (length(cat_flagged_ids) == 0L) next
 
-    # Extract matching rows from original data
     match_rows <- ids %in% cat_flagged_ids
     if (!any(match_rows)) next
 
     cat_data <- data[match_rows, , drop = FALSE]
-
     wb$add_worksheet(sheet_name)
     wb$add_data(sheet_name, cat_data)
 
-    # Header style
-    cat_header <- openxlsx2::create_dimen(
-      cols = seq_len(ncol(cat_data)),
-      rows = 1
-    )
-    wb$add_font(sheet_name,
-      dims  = cat_header,
-      bold  = TRUE,
-      color = openxlsx2::wb_color("FFFFFF")
-    )
-    wb$add_fill(sheet_name,
-      dims  = cat_header,
-      color = openxlsx2::wb_color("4472C4")
-    )
+    hd_cat <- make_header_dims(ncol(cat_data))
+    wb$add_font(sheet_name, dims = hd_cat, bold = TRUE,
+                color = openxlsx2::wb_color("FFFFFF"))
+    wb$add_fill(sheet_name, dims = hd_cat,
+                color = openxlsx2::wb_color("4472C4"))
   }
 
   # --- Write to disk ---
@@ -198,7 +143,18 @@ build_flagged_table <- function(report) {
     )
   })
 
-  dplyr::bind_rows(rows)
+  out <- dplyr::bind_rows(rows)
+  # Ensure columns exist even when empty
+
+  if (nrow(out) == 0L) {
+    out <- dplyr::tibble(
+      check_name  = character(),
+      flagged_id  = character(),
+      flag_reason = character(),
+      severity    = character()
+    )
+  }
+  out
 }
 
 #' Format a check category name into a valid Excel sheet name

@@ -7,11 +7,14 @@
 #' @param id_col Character. Name of the primary key column
 #' @param hh_size_col Character. Name of the household size column
 #' @param roster_count_col Character or NULL. Name of the roster count column (default NULL)
+#' @param min_size Numeric. Minimum plausible household size (default 1)
+#' @param max_size Numeric. Maximum plausible household size (default 30)
 #' @param ... Reserved for future use
 #' @return A check_result object
 #' @export
 check_hh_composition <- function(data, id_col, hh_size_col,
-                                  roster_count_col = NULL, ...) {
+                                  roster_count_col = NULL,
+                                  min_size = 1, max_size = 30, ...) {
   required <- c(id_col, hh_size_col)
   if (!is.null(roster_count_col)) required <- c(required, roster_count_col)
   assert_columns(data, required, context = "check_hh_composition")
@@ -21,8 +24,8 @@ check_hh_composition <- function(data, id_col, hh_size_col,
   hh_sizes <- data[[hh_size_col]]
   n_total <- nrow(data)
 
-  # Implausible size: < 1 or > 30
-  implausible <- !is.na(hh_sizes) & (hh_sizes < 1 | hh_sizes > 30)
+  # Implausible size: outside min_size to max_size range
+  implausible <- !is.na(hh_sizes) & (hh_sizes < min_size | hh_sizes > max_size)
 
   # Roster mismatch
   roster_mismatch <- rep(FALSE, n_total)
@@ -40,7 +43,8 @@ check_hh_composition <- function(data, id_col, hh_size_col,
     reasons <- character()
     if (implausible[i]) {
       reasons <- c(reasons, paste0("HH size ", hh_sizes[i],
-                                   " is implausible (expected 1-30)"))
+                                   " is implausible (expected ",
+                                   min_size, "-", max_size, ")"))
     }
     if (roster_mismatch[i]) {
       reasons <- c(reasons, paste0("HH size ", hh_sizes[i],

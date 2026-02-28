@@ -4,5 +4,7 @@ utils::globalVariables(c(
   "z_score", ".fp", ".id", "duration", "n_surveys", "start_time",
   "gap_minutes", "n_missing", "miss_rate", ".data", "target", "actual",
   "enumerator", "n_errors", "n_cells", "id", "stratum", "n_matched",
-  "n_compared", "n_error", "error_rate", "n_changed"
+  "n_compared", "n_error", "error_rate", "n_changed",
+  "coverage_pct", "mean_miss_rate", "mean_duration", "date", "n", "value",
+  "dk_rate", "n_devices", "change_rate"
 ))

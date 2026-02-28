@@ -16,11 +16,14 @@ check_missing_by_variable <- function(data, id_col, threshold = 0.05,
   check_cols <- setdiff(names(data), c(id_col, exclude_cols))
   n_total <- nrow(data)
 
+  n_miss_vec <- vapply(check_cols, function(col) sum(is.na(data[[col]])), numeric(1))
+  miss_rate_vec <- if (n_total > 0L) n_miss_vec / n_total else rep(NA_real_, length(check_cols))
+
   miss_stats <- dplyr::tibble(
     variable   = check_cols,
-    n_missing  = vapply(check_cols, function(col) sum(is.na(data[[col]])), numeric(1)),
+    n_missing  = n_miss_vec,
     n_total    = as.integer(n_total),
-    miss_rate  = n_missing / n_total
+    miss_rate  = miss_rate_vec
   )
 
   flagged <- miss_stats |> dplyr::filter(miss_rate > threshold)

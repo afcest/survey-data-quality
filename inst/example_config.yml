@@ -10,12 +10,13 @@ project:
 
 variables:
   id: "hh_id"
-  enumerator: "enumerator_id"
+  enumerator: "enum_id"
   date: "submission_date"
   start_time: "start"
   end_time: "end"
-  duration: "duration_minutes"
-  gps: "_geopoint"
+  duration: "duration"
+  gps_latitude: "gps_lat"
+  gps_longitude: "gps_lon"
 
   # Optional quasi-identifiers for fingerprint duplicate detection
   quasi_ids:
@@ -49,15 +50,6 @@ checks:
       - col: "income"
         min: 0
         max: 1000000
-      - col: "household_size"
-        min: 1
-        max: 30
-      - col: "age"
-        min: 0
-        max: 120
-      - col: "plot_area_ha"
-        min: 0
-        max: 500
 
   enumerator:
     productivity:

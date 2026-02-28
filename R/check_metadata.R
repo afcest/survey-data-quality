@@ -16,7 +16,7 @@ check_consent <- function(data, id_col, consent_col, consent_value = 1, ...) {
   n_total <- nrow(data)
 
   consent_vals <- data[[consent_col]]
-  no_consent <- which(!is.na(consent_vals) & consent_vals != consent_value |
+  no_consent <- which((!is.na(consent_vals) & consent_vals != consent_value) |
                         is.na(consent_vals))
 
   flagged_ids <- ids[no_consent]
@@ -112,8 +112,8 @@ check_interview_completed <- function(data, id_col, status_col,
   n_total <- nrow(data)
 
   statuses <- data[[status_col]]
-  not_complete <- which(!is.na(statuses) &
-                          as.character(statuses) != as.character(complete_value) |
+  not_complete <- which((!is.na(statuses) &
+                          as.character(statuses) != as.character(complete_value)) |
                           is.na(statuses))
 
   flagged_ids <- ids[not_complete]

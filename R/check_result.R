@@ -92,7 +92,7 @@ bind_check_results <- function(...) {
     check_category = vapply(results, `[[`, character(1), "check_category"),
     n_flagged      = vapply(results, `[[`, integer(1), "n_flagged"),
     n_total        = vapply(results, `[[`, integer(1), "n_total"),
-    pct_flagged    = ifelse(n_total > 0, round(n_flagged / n_total * 100, 2), 0),
+    pct_flagged    = dplyr::if_else(n_total > 0L, round(n_flagged / n_total * 100, 2), 0),
     severity       = vapply(results, `[[`, character(1), "severity")
   )
 }

@@ -1,15 +1,7 @@
 ---
-title: |
-  | \textbf{\Huge afcestDataCheck}
-  | \vspace{0.3cm}
-  | \Large Comprehensive High-Frequency Data Quality Checks
-  | \Large for Survey Research
-  | \vspace{0.5cm}
-  | \large Version 0.3.0
-author: |
-  | Cedric Bationo
-  | African Center for Studies and Training (AfCEST)
-  | \texttt{cedric@afcest.com}
+title: "afcestDataCheck: Comprehensive Reference Manual"
+subtitle: "High-Frequency Data Quality Checks for Survey Research -- Version 0.3.0"
+author: "Cedric Bationo, African Center for Studies and Training (AfCEST)"
 date: "`r Sys.Date()`"
 output:
   rmarkdown::pdf_document:
@@ -19,25 +11,17 @@ output:
     fig_caption: true
     latex_engine: xelatex
     keep_tex: false
-    includes:
-      in_header: null
 fontsize: 11pt
 geometry: margin=1in
-urlcolor: blue
-linkcolor: darkblue
 header-includes:
   - \usepackage{booktabs}
   - \usepackage{longtable}
   - \usepackage{array}
   - \usepackage{xcolor}
   - \usepackage{fancyhdr}
-  - \usepackage{titlesec}
   - \usepackage{enumitem}
   - \usepackage{float}
-  - \usepackage{caption}
   - \definecolor{darkblue}{RGB}{0,51,102}
-  - \definecolor{codebg}{RGB}{245,245,245}
-  - \definecolor{codeframe}{RGB}{200,200,200}
   - \definecolor{accentgreen}{RGB}{39,119,42}
   - \pagestyle{fancy}
   - \fancyhf{}
@@ -45,9 +29,6 @@ header-includes:
   - \fancyhead[R]{\small\textit{Reference Manual}}
   - \fancyfoot[C]{\thepage}
   - \renewcommand{\headrulewidth}{0.4pt}
-  - \titleformat{\section}{\Large\bfseries\color{darkblue}}{\thesection}{1em}{}
-  - \titleformat{\subsection}{\large\bfseries\color{darkblue}}{\thesubsection}{1em}{}
-  - \titleformat{\subsubsection}{\normalsize\bfseries}{\thesubsubsection}{1em}{}
 vignette: >
   %\VignetteIndexEntry{afcestDataCheck: Comprehensive Reference Manual}
   %\VignetteEngine{knitr::rmarkdown}
@@ -234,26 +215,26 @@ print(res_gps)
 config_text <- "
 project:
   name: Quick Start Demo
-  id_col: hh_id
-  enum_col: enum_id
 
 variables:
-  date_col: date
-  duration_col: duration_min
-  lat_col: lat
-  lon_col: lon
-  consent_col: consent
+  id: hh_id
+  enumerator: enum_id
+  date: date
+  duration: duration_min
+  gps_latitude: lat
+  gps_longitude: lon
+  consent: consent
 
 checks:
   identification:
     duplicate_ids: true
     missing_ids: true
   timing:
-    survey_duration:
-      min_duration: 15
-      max_duration: 120
+    duration:
+      min_minutes: 15
+      max_minutes: 120
   gps:
-    gps_null_island: true
+    null_island: true
 "
 config <- read_config(textConnection(config_text))
 report <- run_all_checks(survey, config = config, verbose = TRUE)
@@ -265,10 +246,11 @@ summary(report)
 
 ```{r quickstart-export}
 # Export to a formatted Excel workbook
-export_to_excel(report, file = "hfc_report.xlsx")
+export_to_excel(report$results, data = survey, id_col = "hh_id",
+                path = "hfc_report.xlsx")
 
 # Or export to CSV
-export_to_csv(report, dir = "hfc_output/")
+export_to_csv(report$results, output_dir = "hfc_output/")
 ```
 
 \newpage
@@ -290,12 +272,15 @@ Every check function returns a named list of class
 \toprule
 \textbf{Field} & \textbf{Type} & \textbf{Description} \\
 \midrule
-\texttt{check\_name}   & \texttt{character(1)} & Machine-readable check identifier \\
-\texttt{n\_flagged}    & \texttt{integer(1)}   & Number of observations flagged \\
-\texttt{flagged\_ids}  & \texttt{character()}  & Vector of IDs that were flagged \\
-\texttt{flag\_reason}  & \texttt{character()}  & Human-readable reason per flag \\
-\texttt{severity}      & \texttt{character(1)} & One of \texttt{"error"}, \texttt{"warning"}, \texttt{"info"} \\
-\texttt{summary\_stat} & \texttt{list()}       & Check-specific summary statistics \\
+\texttt{check\_name}     & \texttt{character(1)} & Machine-readable check identifier \\
+\texttt{check\_category} & \texttt{character(1)} & Category (e.g., ``identification'', ``enumerator'') \\
+\texttt{n\_flagged}      & \texttt{integer(1)}   & Number of observations flagged \\
+\texttt{n\_total}        & \texttt{integer(1)}   & Total number of records examined \\
+\texttt{flagged\_ids}    & \texttt{character()}  & Vector of IDs that were flagged \\
+\texttt{flag\_reason}    & \texttt{character()}  & Human-readable reason per flag \\
+\texttt{severity}        & \texttt{character(1)} & One of \texttt{"error"}, \texttt{"warning"}, \texttt{"info"} \\
+\texttt{summary\_stat}   & \texttt{list()}       & Check-specific summary statistics \\
+\texttt{timestamp}       & \texttt{POSIXct}      & Timestamp when the check was run \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -305,12 +290,14 @@ Every check function returns a named list of class
 ```{r check-result-helpers}
 # Create a check_result manually (used internally)
 res <- new_check_result(
-  check_name   = "my_custom_check",
-  n_flagged    = 3L,
-  flagged_ids  = c("HH-001", "HH-007", "HH-042"),
-  flag_reason  = rep("Custom logic violation", 3),
-  severity     = "warning",
-  summary_stat = list(total_obs = 200, pct_flagged = 1.5)
+  check_name     = "my_custom_check",
+  check_category = "logic",
+  n_flagged      = 3L,
+  n_total        = 200L,
+  flagged_ids    = c("HH-001", "HH-007", "HH-042"),
+  flag_reason    = rep("Custom logic violation", 3),
+  severity       = "warning",
+  summary_stat   = list(total_obs = 200, pct_flagged = 1.5)
 )
 
 # Validate
@@ -1712,79 +1699,82 @@ Back-checks (re-interviews of a subsample) are a cornerstone of
 survey quality assurance. These functions compare original and
 back-check data.
 
-### `check_backcheck_t1()`
+### `check_backcheck_t1_match()`
 
 \vspace{0.2cm}
 
 **Signature:**
 ```{r, eval=FALSE}
-check_backcheck_t1(original, backcheck, id_col, lat_col, lon_col,
-                   max_distance_km = 1)
+check_backcheck_t1_match(data, id_col, backcheck_data, bc_id_col,
+                         t1_cols, ...)
 ```
 
-**Description:** Type~1 back-check: verifies that the back-check
-interview occurred at the same location as the original, by
-computing the Haversine distance between GPS coordinates.
-Severity: \texttt{error}.
+**Description:** Type~1 back-check: compares Type~1 variables
+(e.g., gender, location) between original and back-check data.
+Any mismatch on these variables signals a serious data quality
+issue because they should never change. Severity: \texttt{error}.
 
 **Example:**
 ```{r check-bc-t1}
-res <- check_backcheck_t1(
-  original = survey, backcheck = bc_data,
-  id_col = "hh_id", lat_col = "lat", lon_col = "lon",
-  max_distance_km = 1
+res <- check_backcheck_t1_match(
+  data = survey, id_col = "hh_id",
+  backcheck_data = bc_data, bc_id_col = "hh_id",
+  t1_cols = c("gender", "village")
 )
 ```
 
 ---
 
-### `check_backcheck_t2()`
+### `check_backcheck_t2_match()`
 
 \vspace{0.2cm}
 
 **Signature:**
 ```{r, eval=FALSE}
-check_backcheck_t2(original, backcheck, id_col, compare_cols)
+check_backcheck_t2_match(data, id_col, backcheck_data, bc_id_col,
+                         t2_cols, max_error_rate = 0.10,
+                         enum_col = NULL, ...)
 ```
 
 **Description:** Type~2 back-check: compares categorical or
 yes/no responses between original and back-check. Computes
-exact-match agreement rates per variable. Severity:
+exact-match agreement rates per variable and flags enumerators
+whose error rate exceeds \texttt{max\_error\_rate}. Severity:
 \texttt{warning}.
 
 **Example:**
 ```{r check-bc-t2}
-res <- check_backcheck_t2(
-  original = survey, backcheck = bc_data,
-  id_col = "hh_id",
-  compare_cols = c("roof_material", "wall_material", "water_source")
+res <- check_backcheck_t2_match(
+  data = survey, id_col = "hh_id",
+  backcheck_data = bc_data, bc_id_col = "hh_id",
+  t2_cols = c("roof_material", "wall_material", "water_source"),
+  max_error_rate = 0.10, enum_col = "enum_id"
 )
 ```
 
 ---
 
-### `check_backcheck_t3()`
+### `check_backcheck_t3_match()`
 
 \vspace{0.2cm}
 
 **Signature:**
 ```{r, eval=FALSE}
-check_backcheck_t3(original, backcheck, id_col, compare_cols,
-                   tolerance)
+check_backcheck_t3_match(data, id_col, backcheck_data, bc_id_col,
+                         t3_cols, ...)
 ```
 
-**Description:** Type~3 back-check: compares continuous/numeric
-responses with a tolerance band. Discrepancies exceeding
-\texttt{tolerance} (absolute or proportional) are flagged.
-Severity: \texttt{warning}.
+**Description:** Type~3 back-check: compares variables that are
+expected to change between original and back-check (e.g.,
+satisfaction, attitude). This check is purely informational and
+computes change rates per variable. Severity: \texttt{info}.
 
 **Example:**
 ```{r check-bc-t3}
-res <- check_backcheck_t3(
-  original = survey, backcheck = bc_data,
-  id_col = "hh_id",
-  compare_cols = c("hh_size", "n_rooms"),
-  tolerance = c(hh_size = 1, n_rooms = 1)
+res <- check_backcheck_t3_match(
+  data = survey, id_col = "hh_id",
+  backcheck_data = bc_data, bc_id_col = "hh_id",
+  t3_cols = c("satisfaction", "attitude")
 )
 ```
 
@@ -1796,48 +1786,50 @@ res <- check_backcheck_t3(
 
 **Signature:**
 ```{r, eval=FALSE}
-check_backcheck_coverage(backcheck, id_col, target_n,
-                         stratum_col = NULL,
-                         target_per_stratum = NULL)
+check_backcheck_coverage(data, id_col, backcheck_data, bc_id_col,
+                         strata_col = NULL, min_coverage = 0.10,
+                         ...)
 ```
 
-**Description:** Assesses whether the back-check sample meets
-coverage targets, overall and per stratum. Severity:
-\texttt{info}.
+**Description:** Verifies that a sufficient percentage of original
+surveys have been back-checked. If strata are provided, coverage
+is computed per stratum. Severity: \texttt{warning}.
 
 **Example:**
 ```{r check-bc-coverage}
 res <- check_backcheck_coverage(
-  bc_data, id_col = "hh_id", target_n = 30,
-  stratum_col = "region",
-  target_per_stratum = c(region_A = 10, region_B = 10, region_C = 10)
+  data = survey, id_col = "hh_id",
+  backcheck_data = bc_data, bc_id_col = "hh_id",
+  strata_col = "region", min_coverage = 0.10
 )
 ```
 
 ---
 
-### `check_backcheck_enumerator()`
+### `check_backcheck_by_enumerator()`
 
 \vspace{0.2cm}
 
 **Signature:**
 ```{r, eval=FALSE}
-check_backcheck_enumerator(original, backcheck, id_col, enum_col,
-                           compare_cols, max_error_rate = 0.1)
+check_backcheck_by_enumerator(data, id_col, enum_col,
+                              backcheck_data, bc_id_col,
+                              compare_cols, threshold_sd = 2,
+                              ...)
 ```
 
-**Description:** Computes per-enumerator error rates from
-back-check comparisons. Enumerators exceeding
-\texttt{max\_error\_rate} are flagged for review. Severity:
-\texttt{warning}.
+**Description:** Computes per-enumerator error rates across all
+comparison columns and flags enumerators whose error rate is more
+than \texttt{threshold\_sd} standard deviations above the team
+mean. Severity: \texttt{warning}.
 
 **Example:**
 ```{r check-bc-enum}
-res <- check_backcheck_enumerator(
-  original = survey, backcheck = bc_data,
-  id_col = "hh_id", enum_col = "enum_id",
+res <- check_backcheck_by_enumerator(
+  data = survey, id_col = "hh_id", enum_col = "enum_id",
+  backcheck_data = bc_data, bc_id_col = "hh_id",
   compare_cols = c("roof_material", "hh_size"),
-  max_error_rate = 0.1
+  threshold_sd = 2
 )
 ```
 
@@ -2103,18 +2095,20 @@ A configuration file has three top-level sections:
 # config.yml
 project:
   name: "Household Survey 2025"
-  id_col: "hh_id"
-  enum_col: "enum_id"
+  survey_start: "2025-01-15"
+  survey_end: "2025-06-30"
 
 variables:
-  date_col: "interview_date"
-  duration_col: "duration_min"
-  lat_col: "gps_lat"
-  lon_col: "gps_lon"
-  accuracy_col: "gps_accuracy"
-  consent_col: "consent"
-  version_col: "form_version"
-  hh_size_col: "hh_size"
+  id: "hh_id"
+  enumerator: "enum_id"
+  date: "interview_date"
+  duration: "duration_min"
+  gps_latitude: "gps_lat"
+  gps_longitude: "gps_lon"
+  gps_accuracy: "gps_accuracy"
+  consent: "consent"
+  form_version: "form_version"
+  hh_size: "hh_size"
 
 checks:
   identification:
@@ -2187,9 +2181,9 @@ validate_config(config)
 #> Config validation passed
 
 # Extract a nested value with a default
-id_col <- cfg_get(config, "project", "id_col")
+id_col <- cfg_get(config, "variables", "id")
 max_daily <- cfg_get(config, "checks", "enumerator",
-                     "enumerator_productivity", "max_daily",
+                     "productivity", "max_daily",
                      default = 10)
 ```
 
@@ -2208,8 +2202,8 @@ run_all_checks(
   config,
   sampling_frame  = NULL,
   backcheck_data  = NULL,
-  text_audit      = NULL,
-  verbose         = TRUE
+  verbose         = TRUE,
+  ...
 )
 ```
 
@@ -2222,11 +2216,11 @@ run_all_checks(
 \textbf{Parameter} & \textbf{Description} \\
 \midrule
 \texttt{data}            & Main survey data frame \\
-\texttt{config}          & A validated configuration list (from \texttt{read\_config()}) \\
-\texttt{sampling\_frame} & Optional data frame for sample-tracking checks \\
+\texttt{config}          & Either a path to a YAML config file or an \texttt{adc\_config} object \\
+\texttt{sampling\_frame} & Optional character vector of valid IDs \\
 \texttt{backcheck\_data} & Optional back-check data frame \\
-\texttt{text\_audit}     & Optional text audit paradata \\
 \texttt{verbose}         & If \texttt{TRUE}, prints progress messages \\
+\texttt{...}             & Reserved for future use \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -2324,7 +2318,8 @@ coords
 ## Excel Export
 
 ```{r export-excel}
-export_to_excel(report, file = "hfc_report.xlsx")
+export_to_excel(report$results, data = survey, id_col = "hh_id",
+                path = "hfc_report.xlsx")
 ```
 
 The Excel workbook contains:
@@ -2343,7 +2338,7 @@ The Excel workbook contains:
 ## CSV Export
 
 ```{r export-csv}
-export_to_csv(report, dir = "hfc_output/")
+export_to_csv(report$results, output_dir = "hfc_output/")
 ```
 
 Generates two files in \texttt{dir}:
@@ -2494,11 +2489,11 @@ shinyApp(ui, server)
 53 & \texttt{check\_name\_format}              & Text             & info    & 5.10 \\
 54 & \texttt{check\_phone\_format}             & Text             & warning & 5.10 \\
 \addlinespace
-55 & \texttt{check\_backcheck\_t1}             & Back-Check       & error   & 5.11 \\
-56 & \texttt{check\_backcheck\_t2}             & Back-Check       & warning & 5.11 \\
-57 & \texttt{check\_backcheck\_t3}             & Back-Check       & warning & 5.11 \\
-58 & \texttt{check\_backcheck\_coverage}       & Back-Check       & info    & 5.11 \\
-59 & \texttt{check\_backcheck\_enumerator}     & Back-Check       & warning & 5.11 \\
+55 & \texttt{check\_backcheck\_t1\_match}       & Back-Check       & error   & 5.11 \\
+56 & \texttt{check\_backcheck\_t2\_match}       & Back-Check       & warning & 5.11 \\
+57 & \texttt{check\_backcheck\_t3\_match}       & Back-Check       & info    & 5.11 \\
+58 & \texttt{check\_backcheck\_coverage}       & Back-Check       & warning & 5.11 \\
+59 & \texttt{check\_backcheck\_by\_enumerator} & Back-Check       & warning & 5.11 \\
 \addlinespace
 60 & \texttt{check\_text\_audit\_duration}     & Paradata         & warning & 5.12 \\
 61 & \texttt{check\_text\_audit\_sequence}     & Paradata         & info    & 5.12 \\

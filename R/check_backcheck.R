@@ -155,11 +155,13 @@ check_backcheck_t1_match <- function(data, id_col, backcheck_data, bc_id_col,
   bc_matched   <- backcheck_data[match(matched_ids, bc_ids), , drop = FALSE]
 
   # Compare each T1 variable
+  # One-sided NA (one value present, one NA) counts as a mismatch
   per_var <- vapply(t1_cols, function(col) {
     orig_vals <- as.character(orig_matched[[col]])
     bc_vals   <- as.character(bc_matched[[col]])
-    sum(orig_vals == bc_vals | (is.na(orig_vals) & is.na(bc_vals)),
-        na.rm = FALSE)
+    both_na <- is.na(orig_vals) & is.na(bc_vals)
+    both_present <- !is.na(orig_vals) & !is.na(bc_vals)
+    sum(both_na | (both_present & orig_vals == bc_vals))
   }, integer(1))
 
   match_rate_by_variable <- dplyr::tibble(
@@ -275,11 +277,13 @@ check_backcheck_t2_match <- function(data, id_col, backcheck_data, bc_id_col,
   bc_matched   <- backcheck_data[match(matched_ids, bc_ids), , drop = FALSE]
 
   # Per-variable error rates
+  # One-sided NA (one value present, one NA) counts as a mismatch
   per_var_errors <- vapply(t2_cols, function(col) {
     orig_vals <- as.character(orig_matched[[col]])
     bc_vals   <- as.character(bc_matched[[col]])
-    sum(!(orig_vals == bc_vals | (is.na(orig_vals) & is.na(bc_vals))),
-        na.rm = FALSE)
+    both_na <- is.na(orig_vals) & is.na(bc_vals)
+    both_present <- !is.na(orig_vals) & !is.na(bc_vals)
+    sum(!(both_na | (both_present & orig_vals == bc_vals)))
   }, integer(1))
 
   error_rate_by_variable <- dplyr::tibble(
@@ -297,7 +301,9 @@ check_backcheck_t2_match <- function(data, id_col, backcheck_data, bc_id_col,
     error_matrix <- vapply(t2_cols, function(col) {
       orig_vals <- as.character(orig_matched[[col]])
       bc_vals   <- as.character(bc_matched[[col]])
-      !(orig_vals == bc_vals | (is.na(orig_vals) & is.na(bc_vals)))
+      both_na <- is.na(orig_vals) & is.na(bc_vals)
+      both_present <- !is.na(orig_vals) & !is.na(bc_vals)
+      !(both_na | (both_present & orig_vals == bc_vals))
     }, logical(length(matched_ids)))
 
     if (is.null(dim(error_matrix))) {
@@ -405,11 +411,13 @@ check_backcheck_t3_match <- function(data, id_col, backcheck_data, bc_id_col,
   orig_matched <- data[match(matched_ids, orig_ids), , drop = FALSE]
   bc_matched   <- backcheck_data[match(matched_ids, bc_ids), , drop = FALSE]
 
+  # One-sided NA (one value present, one NA) counts as a change
   per_var_changes <- vapply(t3_cols, function(col) {
     orig_vals <- as.character(orig_matched[[col]])
     bc_vals   <- as.character(bc_matched[[col]])
-    sum(!(orig_vals == bc_vals | (is.na(orig_vals) & is.na(bc_vals))),
-        na.rm = FALSE)
+    both_na <- is.na(orig_vals) & is.na(bc_vals)
+    both_present <- !is.na(orig_vals) & !is.na(bc_vals)
+    sum(!(both_na | (both_present & orig_vals == bc_vals)))
   }, integer(1))
 
   change_rate_by_variable <- dplyr::tibble(

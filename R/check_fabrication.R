@@ -27,14 +27,11 @@ check_benford_first_digit <- function(data, id_col, num_col,
   vals <- abs(vals[!is.na(vals) & vals != 0])
   n_values <- length(vals)
 
-  # Extract first digit: strip to first non-zero digit
-  first_digits <- as.integer(substr(format(vals, scientific = FALSE),
-                                     regexpr("[1-9]", format(vals, scientific = FALSE)),
-                                     regexpr("[1-9]", format(vals, scientific = FALSE))))
-  # Safer extraction: use log10
-  first_digits <- as.integer(substr(as.character(
-    vals / 10^floor(log10(vals))
-  ), 1, 1))
+  # Extract first digit using log10, with format() to prevent scientific notation
+  first_digits <- as.integer(substr(
+    format(vals / 10^floor(log10(vals)), scientific = FALSE),
+    1, 1
+  ))
   # Ensure only digits 1-9
 
   first_digits <- first_digits[first_digits >= 1L & first_digits <= 9L &
@@ -260,14 +257,14 @@ check_straightlining <- function(data, id_col, check_cols,
   n_total <- nrow(data)
   n_cols <- length(check_cols)
 
-  # Compute identical-response rate per row
-  identical_rates <- vapply(seq_len(n_total), function(i) {
-    row_vals <- as.character(data[i, check_cols, drop = TRUE])
-    # Remove NAs for the calculation
+  # Compute identical-response rate per row using matrix for efficiency
+  check_matrix <- as.matrix(data[, check_cols, drop = FALSE])
+  storage.mode(check_matrix) <- "character"
+  identical_rates <- apply(check_matrix, 1, function(row_vals) {
     row_vals <- row_vals[!is.na(row_vals)]
     if (length(row_vals) == 0) return(NA_real_)
     max(table(row_vals)) / length(row_vals)
-  }, numeric(1))
+  })
 
   # Flag surveys exceeding threshold
   flagged_mask <- !is.na(identical_rates) & identical_rates > max_identical_rate
@@ -318,9 +315,10 @@ check_response_entropy <- function(data, id_col, check_cols,
   ids <- as_id(data[[id_col]])
   n_total <- nrow(data)
 
-  # Compute normalized Shannon entropy per row
-  entropy_ratios <- vapply(seq_len(n_total), function(i) {
-    row_vals <- as.character(data[i, check_cols, drop = TRUE])
+  # Compute normalized Shannon entropy per row using matrix for efficiency
+  check_matrix <- as.matrix(data[, check_cols, drop = FALSE])
+  storage.mode(check_matrix) <- "character"
+  entropy_ratios <- apply(check_matrix, 1, function(row_vals) {
     row_vals <- row_vals[!is.na(row_vals)]
     n <- length(row_vals)
     if (n <= 1) return(NA_real_)
@@ -333,7 +331,7 @@ check_response_entropy <- function(data, id_col, check_cols,
     if (n_categories <= 1) return(0)
     # Normalized entropy
     h / log2(n_categories)
-  }, numeric(1))
+  })
 
   # Flag surveys with entropy below threshold
   flagged_mask <- !is.na(entropy_ratios) & entropy_ratios < min_entropy_ratio
@@ -418,6 +416,11 @@ check_duplicate_response_patterns <- function(data, id_col, check_cols,
   # If threshold < 1.0, also check near-matches across all rows
   if (similarity_threshold < 1.0 && n_total <= 5000) {
     response_matrix <- as.matrix(data[, check_cols, drop = FALSE])
+    # Pre-allocate vectors for collecting near-match pairs
+    pair_id1 <- character(n_total)
+    pair_id2 <- character(n_total)
+    pair_sim <- numeric(n_total)
+    n_near <- 0L
     for (i in seq_len(n_total - 1)) {
       for (j in (i + 1):n_total) {
         # Skip pairs already flagged as exact
@@ -430,12 +433,28 @@ check_duplicate_response_patterns <- function(data, id_col, check_cols,
         if (n_comparable == 0) next
         sim <- n_match / n_comparable
         if (sim >= similarity_threshold) {
-          flagged_pairs[[length(flagged_pairs) + 1]] <- list(
-            id1 = ids[i], id2 = ids[j], similarity = round(sim, 4)
-          )
-          flagged_id_set <- c(flagged_id_set, ids[i], ids[j])
+          n_near <- n_near + 1L
+          # Grow vectors if needed
+          if (n_near > length(pair_id1)) {
+            pair_id1 <- c(pair_id1, character(n_total))
+            pair_id2 <- c(pair_id2, character(n_total))
+            pair_sim <- c(pair_sim, numeric(n_total))
+          }
+          pair_id1[n_near] <- ids[i]
+          pair_id2[n_near] <- ids[j]
+          pair_sim[n_near] <- round(sim, 4)
         }
       }
+    }
+    if (n_near > 0L) {
+      for (k in seq_len(n_near)) {
+        flagged_pairs[[length(flagged_pairs) + 1]] <- list(
+          id1 = pair_id1[k], id2 = pair_id2[k], similarity = pair_sim[k]
+        )
+      }
+      flagged_id_set <- c(flagged_id_set,
+                          pair_id1[seq_len(n_near)],
+                          pair_id2[seq_len(n_near)])
     }
   }
 

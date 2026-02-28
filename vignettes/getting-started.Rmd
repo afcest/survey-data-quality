@@ -835,17 +835,35 @@ three tiers:
 original <- read.csv("data/main_survey.csv")
 backcheck <- read.csv("data/backcheck_survey.csv")
 
-# The orchestrator can accept backcheck_data as a parameter
-report <- run_all_checks(
-  original,
-  config = "config.yml",
-  backcheck_data = backcheck
+# Note: the `backcheck_data` parameter is accepted by run_all_checks()
+# but back-check integration in the orchestrator is planned for a future
+# release. For now, run back-check functions individually:
+res_t1 <- check_backcheck_t1_match(
+  data = original, id_col = "hh_id",
+  backcheck_data = backcheck, bc_id_col = "hh_id",
+  t1_cols = c("gender", "village")
+)
+res_t2 <- check_backcheck_t2_match(
+  data = original, id_col = "hh_id",
+  backcheck_data = backcheck, bc_id_col = "hh_id",
+  t2_cols = c("roof_material", "wall_material"),
+  enum_col = "enum_id"
+)
+res_coverage <- check_backcheck_coverage(
+  data = original, id_col = "hh_id",
+  backcheck_data = backcheck, bc_id_col = "hh_id",
+  min_coverage = 0.10
+)
+res_enum <- check_backcheck_by_enumerator(
+  data = original, id_col = "hh_id", enum_col = "enum_id",
+  backcheck_data = backcheck, bc_id_col = "hh_id",
+  compare_cols = c("roof_material", "hh_size")
 )
 ```
 
-Back-check configuration is done in the YAML under the `backcheck` section.
-This lets you specify which columns to compare and the acceptable tolerance
-for continuous variables.
+Back-check functions can be called individually and their results combined
+with `bind_check_results()`. Full orchestrator integration for back-checks
+is planned for a future release.
 
 ## 10. Advanced: Custom Logic Checks
 
@@ -1050,11 +1068,11 @@ output$duplicate_details <- renderTable({
 | O.03 | `check_text_duplicates()` | Text Quality | warning |
 | O.04 | `check_name_format()` | Text Quality | warning |
 | O.05 | `check_phone_format()` | Text Quality | warning |
-| J.01 | `check_backcheck_t1()` | Back-Check | warning |
-| J.02 | `check_backcheck_t2()` | Back-Check | warning |
-| J.03 | `check_backcheck_t3()` | Back-Check | warning |
-| J.04 | `check_backcheck_coverage()` | Back-Check | info |
-| J.06 | `check_backcheck_enumerator()` | Back-Check | warning |
+| J.01 | `check_backcheck_coverage()` | Back-Check | warning |
+| J.02 | `check_backcheck_t1_match()` | Back-Check | error |
+| J.03 | `check_backcheck_t2_match()` | Back-Check | warning |
+| J.04 | `check_backcheck_t3_match()` | Back-Check | info |
+| J.06 | `check_backcheck_by_enumerator()` | Back-Check | warning |
 | N.01 | `check_text_audit_duration()` | Paradata | warning |
 | N.02 | `check_text_audit_sequence()` | Paradata | warning |
 | N.03 | `check_speed_violations()` | Paradata | warning |

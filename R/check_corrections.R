@@ -94,10 +94,12 @@ apply_corrections <- function(data, correction_log, id_col = "id",
     }
 
     # Apply correction, coercing type to match the target column
-    if (is.numeric(data[[corr_var]])) {
-      data[[corr_var]][target_row] <- as.numeric(corr_new)
-    } else if (is.integer(data[[corr_var]])) {
+    # Check is.integer() before is.numeric() since is.numeric() returns TRUE
+    # for integer vectors too
+    if (is.integer(data[[corr_var]])) {
       data[[corr_var]][target_row] <- as.integer(corr_new)
+    } else if (is.numeric(data[[corr_var]])) {
+      data[[corr_var]][target_row] <- as.numeric(corr_new)
     } else if (is.logical(data[[corr_var]])) {
       data[[corr_var]][target_row] <- as.logical(corr_new)
     } else {

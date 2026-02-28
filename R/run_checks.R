@@ -695,6 +695,7 @@ run_all_checks <- function(data, config, sampling_frame = NULL,
   # ==========================================================================
 
   n_checks <- length(check_registry)
+  pb_env <- environment()
 
   if (verbose) {
     project_name <- cfg_get(config, "project", "name", default = "Survey")
@@ -706,20 +707,21 @@ run_all_checks <- function(data, config, sampling_frame = NULL,
     cli::cli_progress_bar(
       "Running checks",
       total = n_checks,
-      format = "{cli::pb_spin} Running check {cli::pb_current}/{cli::pb_total} [{cli::pb_name}] {cli::pb_bar} {cli::pb_percent}"
+      format = "{cli::pb_spin} Running check {cli::pb_current}/{cli::pb_total} [{cli::pb_name}] {cli::pb_bar} {cli::pb_percent}",
+      .envir = pb_env
     )
   }
 
   for (i in seq_along(check_registry)) {
     entry <- check_registry[[i]]
     if (verbose) {
-      cli::cli_progress_update(.envir = parent.frame())
+      cli::cli_progress_update(.envir = pb_env)
     }
     run_one(entry$name, entry$fn())
   }
 
   if (n_checks > 0L && verbose) {
-    cli::cli_progress_done()
+    cli::cli_progress_done(.envir = pb_env)
   }
 
   # -- Build report ------------------------------------------------------------

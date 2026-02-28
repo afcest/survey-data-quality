@@ -256,8 +256,8 @@ check_gps_boundary <- function(data, id_col, lat_col, lon_col,
   } else if (!is.null(boundary_bbox)) {
     # Bounding box check
     flagged_mask <- valid &
-      (lons < boundary_bbox$xmin | lons > boundary_bbox$xmax |
-       lats < boundary_bbox$ymin | lats > boundary_bbox$ymax)
+      (lons < boundary_bbox[["xmin"]] | lons > boundary_bbox[["xmax"]] |
+       lats < boundary_bbox[["ymin"]] | lats > boundary_bbox[["ymax"]])
   } else {
     # Global validity check
     flagged_mask <- valid &
@@ -433,12 +433,12 @@ check_gps_swap <- function(data, id_col, lat_col, lon_col,
     for (idx in which(valid)) {
       lat <- lats[idx]
       lon <- lons[idx]
-      in_bbox <- lat >= expected_bbox$lat_min & lat <= expected_bbox$lat_max &
-                 lon >= expected_bbox$lon_min & lon <= expected_bbox$lon_max
+      in_bbox <- lat >= expected_bbox[["lat_min"]] & lat <= expected_bbox[["lat_max"]] &
+                 lon >= expected_bbox[["lon_min"]] & lon <= expected_bbox[["lon_max"]]
       if (!in_bbox) {
         # Check if swapped coordinates would be inside
-        swapped_in <- lon >= expected_bbox$lat_min & lon <= expected_bbox$lat_max &
-                      lat >= expected_bbox$lon_min & lat <= expected_bbox$lon_max
+        swapped_in <- lon >= expected_bbox[["lat_min"]] & lon <= expected_bbox[["lat_max"]] &
+                      lat >= expected_bbox[["lon_min"]] & lat <= expected_bbox[["lon_max"]]
         if (swapped_in) {
           flagged_mask[idx] <- TRUE
         }

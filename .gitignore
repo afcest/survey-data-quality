@@ -4,6 +4,4 @@
 .Ruserdata
 *.Rproj
 .DS_Store
-renv/library/
-renv/staging/
-man/*.Rd
+inst/doc

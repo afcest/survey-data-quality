@@ -1,9 +1,11 @@
-#' Export check results to an Excel workbook (IPA HFC format)
+#' Export check results to an Excel workbook (AfCEST professional data quality report format)
 #'
-#' Creates a multi-sheet Excel workbook matching IPA's professional
-#' high-frequency checks output format. Sheets include a Dashboard summary,
-#' Flagged Records master list, per-category detail sheets, a Corrections
-#' template, and optional Enumerator Stats.
+#' Creates a multi-sheet Excel workbook in AfCEST professional
+#' data quality report format with up to 18 sheets covering
+#' README, summary, duplicate IDs, outliers, logic checks, constraints,
+#' other-specify, missing data, skip patterns, survey tracking, GPS issues,
+#' timing issues, fabrication indicators, enumerator dashboard, flagged
+#' records, corrections template, back-check results, and field comments.
 #'
 #' @param report An `adc_report` object (from [run_all_checks()]) or a
 #'   list of `check_result` objects.
@@ -13,209 +15,184 @@
 #' @param path Character. Output file path (`.xlsx`). Defaults to
 #'   `~/Downloads/hfc_report.xlsx`.
 #' @param enum_col Character. Optional enumerator column name. When provided,
-#'   adds an "Enumerator Stats" sheet.
+#'   adds an "Enumerator Dashboard" sheet.
 #' @param date_col Character. Optional date column name. When provided,
-#'   includes submission dates in the Flagged Records sheet.
+#'   includes submission dates in relevant sheets.
 #' @param keep_cols Character vector of additional column names from `data` to
 #'   include in the Flagged Records output (e.g., village name, phone number).
 #'   These columns help field teams identify and locate respondents. Columns
 #'   that do not exist in `data` are silently skipped with a warning.
+#' @param sheets Character. Which sheets to include. `"all"` (default) includes
+#'   all 18 sheets. A character vector (e.g., `c("summary", "corrections")`)
+#'   includes only those sheets plus README. A negative character vector
+#'   (e.g., `c("-fabrication", "-back_check")`) excludes those from all.
+#' @param backcheck_data Optional data frame with back-check comparison data.
 #' @param ... Reserved for future use.
 #' @return Invisible path to the created file.
 #' @export
 export_to_excel <- function(report, data = NULL, id_col = NULL,
                             path = file.path(path.expand("~/Downloads"), "hfc_report.xlsx"),
                             enum_col = NULL, date_col = NULL,
-                            keep_cols = NULL, ...) {
+                            keep_cols = NULL, sheets = "all",
+                            backcheck_data = NULL, ...) {
   if (!requireNamespace("openxlsx2", quietly = TRUE)) {
     cli::cli_abort("Install openxlsx2: {.code install.packages('openxlsx2')}")
   }
 
- # --- Extract check results --------------------------------------------------
+  # --- Extract check results --------------------------------------------------
   results <- .extract_results(report)
-  summary_tbl <- bind_check_results(results)
-  flagged_tbl <- .build_flagged_table_full(results, data, id_col,
-                                            enum_col, date_col,
-                                            keep_cols)
+  summary_tbl <- do.call(bind_check_results, results)
+  flagged_tbl <- tryCatch(
+    .build_flagged_table_full(results, data, id_col,
+                              enum_col, date_col,
+                              keep_cols),
+    error = function(e) {
+      cli::cli_warn("Failed to build flagged table: {e$message}")
+      # Return empty flagged table so export can continue with partial data
+      dplyr::tibble(
+        row_number = integer(), enumerator = character(),
+        date = character(), id = character(),
+        check_name = character(), check_category = character(),
+        variable = character(), value = character(),
+        flag_reason = character(), severity = character(),
+        action = character()
+      )
+    }
+  )
 
-  # --- Styles ----------------------------------------------------------------
+  # --- Build context for sheet builders ---------------------------------------
+  ctx <- list(
+    results        = results,
+    summary_tbl    = summary_tbl,
+    flagged_tbl    = flagged_tbl,
+    data           = data,
+    id_col         = id_col,
+    enum_col       = enum_col,
+    date_col       = date_col,
+    keep_cols      = keep_cols,
+    backcheck_data = backcheck_data
+  )
+
+  # --- Resolve which sheets to include ----------------------------------------
+  sheet_keys <- .resolve_sheets(sheets)
+
+  # --- Styles -----------------------------------------------------------------
   blue_bg   <- openxlsx2::wb_color("4472C4")
   white_txt <- openxlsx2::wb_color("FFFFFF")
   red_bg    <- openxlsx2::wb_color("FF0000")
   orange_bg <- openxlsx2::wb_color("FFA500")
   info_bg   <- openxlsx2::wb_color("4472C4")
 
-  # --- Create workbook -------------------------------------------------------
+  # --- Create workbook --------------------------------------------------------
   wb <- openxlsx2::wb_workbook()
 
-  # === Sheet 1: Dashboard ====================================================
-  dash <- .build_dashboard(results, summary_tbl, flagged_tbl,
-                           data, enum_col, date_col)
-  wb$add_worksheet("Dashboard")
-  wb$add_data("Dashboard", dash, col_names = FALSE)
-  wb$set_col_widths("Dashboard", cols = 1, widths = 40)
-  wb$set_col_widths("Dashboard", cols = 2, widths = 25)
+  # --- Loop over resolved sheets and build each -------------------------------
+  for (key in sheet_keys) {
+    entry <- .sheet_registry[[key]]
+    if (is.null(entry)) next
 
-  # Style section headers (rows where Value column is empty or NA)
-  for (i in seq_len(nrow(dash))) {
-    dims_row <- paste0("A", i, ":B", i)
-    if (is.na(dash[[2]][i]) || dash[[2]][i] == "") {
-      # Section header row
-      wb$add_font("Dashboard", dims = dims_row, bold = TRUE,
-                  color = white_txt)
-      wb$add_fill("Dashboard", dims = dims_row, color = blue_bg)
-    }
-  }
-  wb$freeze_pane("Dashboard", first_row = TRUE)
+    sheet_result <- tryCatch({
+      builder_fn <- match.fun(entry$builder)
+      builder_fn(ctx)
+    }, error = function(e) {
+      cli::cli_warn("Sheet builder {.val {key}} failed: {e$message}")
+      NULL
+    })
+    if (is.null(sheet_result)) next
 
-  # === Sheet 2: Flagged Records ==============================================
-  wb$add_worksheet("Flagged Records")
-  if (nrow(flagged_tbl) > 0) {
-    # Sort: error > warning > info, then by check_name
-    sev_order <- c(error = 1L, warning = 2L, info = 3L)
-    flagged_tbl$`.sev_order` <- sev_order[flagged_tbl$severity]
-    flagged_tbl <- flagged_tbl[order(flagged_tbl$`.sev_order`,
-                                     flagged_tbl$check_name), ]
-    flagged_tbl$`.sev_order` <- NULL
+    sheet_name <- sheet_result$title
+    df <- sheet_result$df
+    if (!is.data.frame(df)) next
 
-    wb$add_data("Flagged Records", flagged_tbl)
-    .style_header(wb, "Flagged Records", ncol(flagged_tbl))
-    .auto_widths(wb, "Flagged Records", flagged_tbl)
+    wb$add_worksheet(sheet_name)
+    wb$add_data(sheet_name, df)
 
-    # Color-code severity column
-    sev_col_idx <- which(names(flagged_tbl) == "severity")
-    if (length(sev_col_idx) == 1L) {
-      sev_letter <- openxlsx2::int2col(sev_col_idx)
-      for (r in seq_len(nrow(flagged_tbl))) {
-        cell_dims <- paste0(sev_letter, r + 1L)
-        sev_val <- flagged_tbl$severity[r]
-        fill_color <- switch(sev_val,
-                             error   = red_bg,
-                             warning = orange_bg,
-                             info    = info_bg,
-                             NULL)
-        if (!is.null(fill_color)) {
-          wb$add_fill("Flagged Records", dims = cell_dims,
-                      color = fill_color)
-          wb$add_font("Flagged Records", dims = cell_dims,
-                      color = white_txt, bold = TRUE)
-        }
+    # --- Special formatting per sheet type ------------------------------------
+    if (key == "readme") {
+      # README gets wider columns, no filter
+      .style_header(wb, sheet_name, ncol(df))
+      wb$set_col_widths(sheet_name, cols = 1, widths = 30)
+      wb$set_col_widths(sheet_name, cols = 2, widths = 80)
+      wb$freeze_pane(sheet_name, first_row = TRUE)
+    } else if (key == "corrections") {
+      # Corrections gets data validation dropdown
+      .style_header(wb, sheet_name, ncol(df))
+      .auto_widths(wb, sheet_name, df)
+      action_col_idx <- which(names(df) == "action")
+      if (length(action_col_idx) == 1L) {
+        action_letter <- openxlsx2::int2col(action_col_idx)
+        n_rows_corr <- max(nrow(df), 1L)
+        max_row <- max(n_rows_corr + 1L, 100L)
+        val_dims <- paste0(action_letter, "2:", action_letter, max_row)
+        wb$add_data_validation(
+          sheet_name,
+          dims = val_dims,
+          type = "list",
+          value = '"replace,drop,okay,pending"'
+        )
       }
-    }
-
-    wb$add_filter("Flagged Records",
-                  rows = 1,
-                  cols = seq_len(ncol(flagged_tbl)))
-    wb$freeze_pane("Flagged Records", first_row = TRUE)
-  } else {
-    no_flags <- dplyr::tibble(message = "No flagged records found.")
-    wb$add_data("Flagged Records", no_flags)
-  }
-
-  # === Sheet 3+: Per-category detail sheets ==================================
-  if (nrow(flagged_tbl) > 0 && !is.null(data) && !is.null(id_col)) {
-    categories <- unique(flagged_tbl$check_category)
-    categories <- categories[!is.na(categories)]
-    ids <- as_id(data[[id_col]])
-
-    for (cat in categories) {
-      sheet_name <- format_sheet_name(cat)
-
-      cat_flags <- flagged_tbl[flagged_tbl$check_category == cat, , drop = FALSE]
-      cat_flagged_ids <- unique(cat_flags$id)
-      if (length(cat_flagged_ids) == 0L) next
-
-      match_rows <- ids %in% as_id(cat_flagged_ids)
-      if (!any(match_rows)) next
-
-      cat_data <- data[match_rows, , drop = FALSE]
-
-      # Merge flag info into data rows
-      # An ID can have multiple flags, so we merge flags onto data
-      flag_info <- cat_flags[, c("id", "check_name", "flag_reason", "severity"),
-                             drop = FALSE]
-      flag_info <- flag_info[!duplicated(paste(flag_info$id,
-                                                flag_info$check_name)), ]
-
-      cat_data_with_id <- cat_data
-      cat_data_with_id$`.merge_id` <- as_id(cat_data_with_id[[id_col]])
-      flag_info$`.merge_id` <- as_id(flag_info$id)
-
-      out <- merge(cat_data_with_id, flag_info[, c(".merge_id", "check_name",
-                                                    "flag_reason", "severity")],
-                   by = ".merge_id", all.x = FALSE)
-      out$`.merge_id` <- NULL
-
-      # Reorder: flag columns first, then data columns
-      flag_cols <- c("check_name", "flag_reason", "severity")
-      data_cols <- setdiff(names(out), flag_cols)
-      out <- out[, c(flag_cols, data_cols), drop = FALSE]
-
-      wb$add_worksheet(sheet_name)
-      wb$add_data(sheet_name, out)
-      .style_header(wb, sheet_name, ncol(out))
-      .auto_widths(wb, sheet_name, out)
-      wb$add_filter(sheet_name, rows = 1, cols = seq_len(ncol(out)))
+      wb$freeze_pane(sheet_name, first_row = TRUE)
+    } else {
+      # Standard sheet: header, auto-widths, filter, freeze
+      .style_header(wb, sheet_name, ncol(df))
+      .auto_widths(wb, sheet_name, df)
+      if (nrow(df) > 0) {
+        wb$add_filter(sheet_name, rows = 1,
+                      cols = seq_len(ncol(df)))
+      }
       wb$freeze_pane(sheet_name, first_row = TRUE)
     }
-  }
 
-  # === Sheet: Corrections ====================================================
-  wb$add_worksheet("Corrections")
-  corrections_df <- .build_corrections_template(flagged_tbl)
-  wb$add_data("Corrections", corrections_df)
-  .style_header(wb, "Corrections", ncol(corrections_df))
-  .auto_widths(wb, "Corrections", corrections_df)
-
-  # Data validation dropdown for action column
-  action_col_idx <- which(names(corrections_df) == "action")
-  if (length(action_col_idx) == 1L) {
-    action_letter <- openxlsx2::int2col(action_col_idx)
-    n_rows_corr <- max(nrow(corrections_df), 1L)
-    # Apply validation to rows 2 through at least 100 (for future entries)
-    max_row <- max(n_rows_corr + 1L, 100L)
-    val_dims <- paste0(action_letter, "2:", action_letter, max_row)
-    wb$add_data_validation(
-      "Corrections",
-      dims = val_dims,
-      type = "list",
-      value = '"replace,drop,okay,pending"'
-    )
-  }
-  wb$freeze_pane("Corrections", first_row = TRUE)
-
-  # === Sheet: Enumerator Stats (optional) ====================================
-  if (!is.null(enum_col) && nrow(flagged_tbl) > 0 && !is.null(data)) {
-    enum_stats <- .build_enumerator_stats(data, flagged_tbl, enum_col)
-    if (!is.null(enum_stats) && nrow(enum_stats) > 0) {
-      wb$add_worksheet("Enumerator Stats")
-      wb$add_data("Enumerator Stats", enum_stats)
-      .style_header(wb, "Enumerator Stats", ncol(enum_stats))
-      .auto_widths(wb, "Enumerator Stats", enum_stats)
-      wb$add_filter("Enumerator Stats",
-                    rows = 1,
-                    cols = seq_len(ncol(enum_stats)))
-      wb$freeze_pane("Enumerator Stats", first_row = TRUE)
-
-      # Conditional formatting: red fill on flag_rate > 0.20
-      fr_col_idx <- which(names(enum_stats) == "flag_rate")
-      if (length(fr_col_idx) == 1L) {
-        fr_letter <- openxlsx2::int2col(fr_col_idx)
-        for (r in seq_len(nrow(enum_stats))) {
-          if (!is.na(enum_stats$flag_rate[r]) &&
-              enum_stats$flag_rate[r] > 0.20) {
-            cell_dims <- paste0(fr_letter, r + 1L)
-            wb$add_fill("Enumerator Stats", dims = cell_dims,
-                        color = red_bg)
-            wb$add_font("Enumerator Stats", dims = cell_dims,
+    # --- Color-code severity columns (batch per severity level) ---------------
+    if ("severity" %in% names(df) && nrow(df) > 0) {
+      sev_col_idx <- which(names(df) == "severity")
+      if (length(sev_col_idx) == 1L) {
+        sev_letter <- openxlsx2::int2col(sev_col_idx)
+        sev_colors <- list(
+          error   = red_bg,
+          warning = orange_bg,
+          info    = info_bg
+        )
+        for (sev_level in names(sev_colors)) {
+          rows_idx <- which(df$severity == sev_level)
+          if (length(rows_idx) == 0L) next
+          # Chunk into batches of 500 to avoid huge dims strings
+          chunks <- split(rows_idx, ceiling(seq_along(rows_idx) / 500L))
+          for (chunk in chunks) {
+            cell_refs <- paste0(sev_letter, chunk + 1L)
+            dims_str <- paste(cell_refs, collapse = ",")
+            wb$add_fill(sheet_name, dims = dims_str,
+                        color = sev_colors[[sev_level]])
+            wb$add_font(sheet_name, dims = dims_str,
                         color = white_txt, bold = TRUE)
           }
         }
       }
     }
+
+    # --- Enumerator dashboard: red highlight on high flag rates ----------------
+    if (key == "enumerator_dashboard" && "flag_rate" %in% names(df) &&
+        nrow(df) > 0) {
+      fr_col_idx <- which(names(df) == "flag_rate")
+      if (length(fr_col_idx) == 1L) {
+        fr_letter <- openxlsx2::int2col(fr_col_idx)
+        high_rows <- which(!is.na(df$flag_rate) & df$flag_rate > 0.20)
+        if (length(high_rows) > 0) {
+          cell_refs <- paste0(fr_letter, high_rows + 1L)
+          dims_str <- paste(cell_refs, collapse = ",")
+          wb$add_fill(sheet_name, dims = dims_str, color = red_bg)
+          wb$add_font(sheet_name, dims = dims_str,
+                      color = white_txt, bold = TRUE)
+        }
+      }
+    }
   }
 
-  # --- Write to disk ---------------------------------------------------------
+  # --- Write to disk ----------------------------------------------------------
+  if (length(wb$worksheets) == 0L) {
+    cli::cli_abort("No sheets were produced. Check your {.arg sheets} parameter and data.")
+  }
+  dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
   openxlsx2::wb_save(wb, path, overwrite = TRUE)
   cli::cli_alert_success("Excel report saved to {.file {path}}")
 
@@ -223,9 +200,9 @@ export_to_excel <- function(report, data = NULL, id_col = NULL,
 }
 
 
-#' Export check results to CSV files (IPA HFC format)
+#' Export check results to CSV files
 #'
-#' Writes multiple CSV files matching the IPA HFC output structure:
+#' Writes multiple CSV files with AfCEST data quality report structure:
 #' dashboard, flagged records, corrections template, and optional
 #' enumerator stats.
 #'
@@ -253,10 +230,23 @@ export_to_csv <- function(report, output_dir, prefix = "hfc_report",
   }
 
   results     <- .extract_results(report)
-  summary_tbl <- bind_check_results(results)
-  flagged_tbl <- .build_flagged_table_full(results, data, id_col,
-                                            enum_col, date_col,
-                                            keep_cols)
+  summary_tbl <- do.call(bind_check_results, results)
+  flagged_tbl <- tryCatch(
+    .build_flagged_table_full(results, data, id_col,
+                              enum_col, date_col,
+                              keep_cols),
+    error = function(e) {
+      cli::cli_warn("Failed to build flagged table: {e$message}")
+      dplyr::tibble(
+        row_number = integer(), enumerator = character(),
+        date = character(), id = character(),
+        check_name = character(), check_category = character(),
+        variable = character(), value = character(),
+        flag_reason = character(), severity = character(),
+        action = character()
+      )
+    }
+  )
 
   paths <- list()
 
@@ -285,7 +275,7 @@ export_to_csv <- function(report, output_dir, prefix = "hfc_report",
   )
 
   # Enumerator stats CSV (optional)
-  if (!is.null(enum_col) && !is.null(data) && nrow(flagged_tbl) > 0) {
+  if (!is.null(enum_col) && !is.null(data)) {
     enum_stats <- .build_enumerator_stats(data, flagged_tbl, enum_col)
     if (!is.null(enum_stats) && nrow(enum_stats) > 0) {
       paths$enumerator_stats <- file.path(
@@ -324,7 +314,7 @@ export_to_csv <- function(report, output_dir, prefix = "hfc_report",
 }
 
 
-#' Build the full flagged records table (IPA format)
+#' Build the full flagged records table
 #'
 #' Columns: row_number, enumerator, date, id, gps_lat, gps_lon, duration,
 #' any `keep_cols`, check_name, check_category, variable, value,
@@ -350,8 +340,10 @@ export_to_csv <- function(report, output_dir, prefix = "hfc_report",
     if (!is_check_result(cr) || cr$n_flagged == 0L) return(NULL)
 
     n <- cr$n_flagged
-    flag_reasons <- if (length(cr$flag_reason) > 0) {
+    flag_reasons <- if (length(cr$flag_reason) == n) {
       cr$flag_reason
+    } else if (length(cr$flag_reason) == 1L) {
+      rep(cr$flag_reason, n)
     } else {
       rep(NA_character_, n)
     }
@@ -373,6 +365,11 @@ export_to_csv <- function(report, output_dir, prefix = "hfc_report",
     if (!is.null(data) && !is.null(id_col) && id_col %in% names(data)) {
       ids_lookup <- as_id(data[[id_col]])
       match_idx <- match(as_id(cr$flagged_ids), ids_lookup)
+      unmatched <- is.na(match_idx)
+      if (any(unmatched)) {
+        n_unmatched <- sum(unmatched)
+        cli::cli_warn("{n_unmatched} flagged ID{?s} not found in data.")
+      }
       out$row_number <- ifelse(is.na(match_idx), NA_integer_,
                                as.integer(match_idx))
       if (!is.null(variable) && variable %in% names(data)) {
@@ -418,11 +415,17 @@ export_to_csv <- function(report, output_dir, prefix = "hfc_report",
     return(empty_tbl)
   }
 
-  # Add enumerator column
-  if (!is.null(enum_col) && !is.null(data) && !is.null(id_col) &&
-      enum_col %in% names(data)) {
+  # Consolidate match lookup
+  if (!is.null(data) && !is.null(id_col) && id_col %in% names(data) && nrow(out) > 0L) {
     ids_lookup <- as_id(data[[id_col]])
     match_idx <- match(as_id(out$id), ids_lookup)
+  } else {
+    match_idx <- rep(NA_integer_, nrow(out))
+  }
+
+  # Add enumerator column
+  if (!is.null(enum_col) && !is.null(data) &&
+      enum_col %in% names(data)) {
     out$enumerator <- ifelse(is.na(match_idx), NA_character_,
                              as.character(data[[enum_col]][match_idx]))
   } else {
@@ -430,10 +433,8 @@ export_to_csv <- function(report, output_dir, prefix = "hfc_report",
   }
 
   # Add date column
-  if (!is.null(date_col) && !is.null(data) && !is.null(id_col) &&
+  if (!is.null(date_col) && !is.null(data) &&
       date_col %in% names(data)) {
-    ids_lookup <- as_id(data[[id_col]])
-    match_idx <- match(as_id(out$id), ids_lookup)
     out$date <- ifelse(is.na(match_idx), NA_character_,
                        as.character(data[[date_col]][match_idx]))
   } else {
@@ -455,10 +456,7 @@ export_to_csv <- function(report, output_dir, prefix = "hfc_report",
     if (length(found_lon) > 0) lon_col <- found_lon[1]
   }
 
-  if (!is.na(lat_col) && !is.na(lon_col) && !is.null(id_col) &&
-      !is.null(data) && id_col %in% names(data) && nrow(out) > 0L) {
-    ids_lookup <- as_id(data[[id_col]])
-    match_idx <- match(as_id(out$id), ids_lookup)
+  if (!is.na(lat_col) && !is.na(lon_col) && nrow(out) > 0L) {
     out$gps_lat <- ifelse(is.na(match_idx), NA_real_,
                           data[[lat_col]][match_idx])
     out$gps_lon <- ifelse(is.na(match_idx), NA_real_,
@@ -468,10 +466,7 @@ export_to_csv <- function(report, output_dir, prefix = "hfc_report",
   # Add duration if available
   dur_candidates <- c("duration", "duration_minutes", "interview_duration")
   dur_col <- if (!is.null(data)) intersect(dur_candidates, names(data))[1] else NA_character_
-  if (!is.na(dur_col) && !is.null(id_col) && !is.null(data) &&
-      id_col %in% names(data) && nrow(out) > 0L) {
-    ids_lookup <- as_id(data[[id_col]])
-    match_idx <- match(as_id(out$id), ids_lookup)
+  if (!is.na(dur_col) && nrow(out) > 0L) {
     out$duration <- ifelse(is.na(match_idx), NA_real_,
                            data[[dur_col]][match_idx])
   }
@@ -490,10 +485,11 @@ export_to_csv <- function(report, output_dir, prefix = "hfc_report",
         "keep_cols not found in data (skipped): {.val {missing_kc}}"
       )
     }
-    valid_keep <- intersect(keep_cols, names(data))
+    reserved_cols <- c("row_number", "enumerator", "date", "id", "gps_lat",
+                       "gps_lon", "duration", "check_name", "check_category",
+                       "variable", "value", "flag_reason", "severity", "action")
+    valid_keep <- setdiff(intersect(keep_cols, names(data)), reserved_cols)
     if (length(valid_keep) > 0L) {
-      ids_lookup <- as_id(data[[id_col]])
-      match_idx <- match(as_id(out$id), ids_lookup)
       for (kc in valid_keep) {
         out[[kc]] <- ifelse(is.na(match_idx), NA_character_,
                             as.character(data[[kc]][match_idx]))
@@ -507,7 +503,10 @@ export_to_csv <- function(report, output_dir, prefix = "hfc_report",
   context_cols <- intersect(c("gps_lat", "gps_lon", "duration"), names(out))
   check_cols <- c("check_name", "check_category", "variable", "value",
                   "flag_reason", "severity", "action")
-  col_order <- c(base_cols, context_cols, keep_col_names, check_cols)
+  col_order <- intersect(
+    c(base_cols, context_cols, keep_col_names, check_cols),
+    names(out)
+  )
   out <- out[, col_order, drop = FALSE]
 
   out
@@ -538,7 +537,17 @@ export_to_csv <- function(report, output_dir, prefix = "hfc_report",
     dates <- as.character(data[[date_col]])
     dates <- dates[!is.na(dates) & dates != ""]
     if (length(dates) > 0) {
-      add_row("Date range", paste(min(dates), "to", max(dates)))
+      parsed_dates <- tryCatch(as.Date(dates), error = function(e) NULL)
+      if (!is.null(parsed_dates)) {
+        parsed_dates <- parsed_dates[!is.na(parsed_dates)]
+        if (length(parsed_dates) > 0) {
+          add_row("Date range", paste(min(parsed_dates), "to", max(parsed_dates)))
+        } else {
+          add_row("Date range", "N/A")
+        }
+      } else {
+        add_row("Date range", paste(min(dates), "to", max(dates)))
+      }
     } else {
       add_row("Date range", "N/A")
     }
@@ -612,8 +621,8 @@ export_to_csv <- function(report, output_dir, prefix = "hfc_report",
   )
 
   if (nrow(flagged_tbl) > 0) {
-    # Take first 3 flags as example rows
-    n_examples <- min(3L, nrow(flagged_tbl))
+    # Include all flagged records in corrections template
+    n_examples <- nrow(flagged_tbl)
     examples <- flagged_tbl[seq_len(n_examples), , drop = FALSE]
 
     example_rows <- dplyr::tibble(
@@ -699,7 +708,10 @@ export_to_csv <- function(report, output_dir, prefix = "hfc_report",
   out$n_warnings[is.na(out$n_warnings)] <- 0L
 
   # Compute flag rate
-  out$flag_rate <- round(out$n_flags / out$n_surveys, 4)
+  out$flag_rate <- round(
+    ifelse(out$n_surveys > 0L, out$n_flags / out$n_surveys, NA_real_),
+    4
+  )
 
   # Sort by flag_rate descending
   out <- out[order(-out$flag_rate), ]
@@ -733,6 +745,7 @@ export_to_csv <- function(report, output_dir, prefix = "hfc_report",
 #' Style header row with blue background and white bold text
 #' @keywords internal
 .style_header <- function(wb, sheet, ncols) {
+  if (ncols == 0L) return(invisible(wb))
   dims <- paste0("A1:", openxlsx2::int2col(ncols), "1")
   wb$add_font(sheet, dims = dims, bold = TRUE,
               color = openxlsx2::wb_color("FFFFFF"))
@@ -746,11 +759,12 @@ export_to_csv <- function(report, output_dir, prefix = "hfc_report",
 #' @keywords internal
 .auto_widths <- function(wb, sheet, df) {
   ncols <- ncol(df)
-  # Estimate width: max of header length and a reasonable default
+  # Sample rows for width estimation
+  sample_df <- if (nrow(df) > 200L) df[seq_len(200L), , drop = FALSE] else df
   widths <- vapply(seq_len(ncols), function(i) {
     header_len <- nchar(names(df)[i])
-    max_data <- if (nrow(df) > 0) {
-      vals <- nchar(as.character(df[[i]]))
+    max_data <- if (nrow(sample_df) > 0) {
+      vals <- nchar(as.character(sample_df[[i]]))
       vals <- vals[!is.na(vals)]
       if (length(vals) > 0) max(vals) else 0L
     } else {
@@ -768,7 +782,7 @@ export_to_csv <- function(report, output_dir, prefix = "hfc_report",
 #' @param report A list of check_result objects
 #' @return A tibble with columns: check_name, flagged_id, flag_reason,
 #'   severity. This is the simplified version without context columns;
-#'   see [.build_flagged_table_full()] for the IPA-format version with
+#'   see [.build_flagged_table_full()] for the full version with
 #'   row_number, enumerator, date, GPS, duration, and keep_cols.
 #' @keywords internal
 build_flagged_table <- function(report) {
@@ -781,7 +795,7 @@ build_flagged_table <- function(report) {
   results <- flatten_results(report)
 
   rows <- lapply(results, function(cr) {
-    if (cr$n_flagged == 0L) return(NULL)
+    if (!is_check_result(cr) || cr$n_flagged == 0L) return(NULL)
     dplyr::tibble(
       check_name = rep(cr$check_name, cr$n_flagged),
       flagged_id = cr$flagged_ids,
@@ -815,8 +829,755 @@ build_flagged_table <- function(report) {
 format_sheet_name <- function(cat) {
   # Capitalize first letter, replace underscores with spaces
   name <- gsub("_", " ", cat)
+  # Remove Excel-forbidden characters
+  name <- gsub('[\\\\/*?:\\[\\]]', '_', name, perl = TRUE)
   name <- paste0(toupper(substr(name, 1, 1)), substr(name, 2, nchar(name)))
   # Excel sheet names max 31 chars
   if (nchar(name) > 31) name <- substr(name, 1, 31)
   name
+}
+
+
+# =============================================================================
+# Sheet Registry & Resolution
+# =============================================================================
+
+#' Registry of all available sheets
+#' @keywords internal
+.sheet_registry <- list(
+  readme               = list(name = "Guide",                builder = ".build_sheet_readme"),
+  summary              = list(name = "Check Summary",        builder = ".build_sheet_summary"),
+  duplicate_ids        = list(name = "Duplicate IDs",        builder = ".build_sheet_duplicates"),
+  outliers             = list(name = "Outliers",             builder = ".build_sheet_outliers"),
+  logic                = list(name = "Logic Errors",         builder = ".build_sheet_logic"),
+  constraints          = list(name = "Constraint Violations",builder = ".build_sheet_constraints"),
+  other_specify        = list(name = "Other Specify",        builder = ".build_sheet_other_specify"),
+  all_missing          = list(name = "Missing Data",         builder = ".build_sheet_all_missing"),
+  skip_patterns        = list(name = "Skip Violations",      builder = ".build_sheet_skip_patterns"),
+  survey_tracking      = list(name = "Progress Tracker",     builder = ".build_sheet_survey_tracking"),
+  gps_issues           = list(name = "GPS Issues",           builder = ".build_sheet_gps"),
+  timing_issues        = list(name = "Timing Issues",        builder = ".build_sheet_timing"),
+  fabrication          = list(name = "Fabrication Flags",     builder = ".build_sheet_fabrication"),
+  enumerator_dashboard = list(name = "Enumerator Performance", builder = ".build_sheet_enumerator"),
+  flagged_records      = list(name = "All Flags",            builder = ".build_sheet_flagged"),
+  corrections          = list(name = "Corrections Log",      builder = ".build_sheet_corrections"),
+  back_check           = list(name = "Back-Check Results",   builder = ".build_sheet_backcheck"),
+  field_comments       = list(name = "Field Comments",       builder = ".build_sheet_field_comments")
+)
+
+
+#' Resolve which sheets to include based on the `sheets` parameter
+#'
+#' @param sheets Character. `"all"`, a positive vector of keys, or a negative
+#'   vector (prefixed with `-`) to exclude.
+#' @return Character vector of sheet registry keys to include.
+#' @keywords internal
+.resolve_sheets <- function(sheets) {
+  all_keys <- names(.sheet_registry)
+
+  if (anyNA(sheets)) {
+    cli::cli_abort("{.arg sheets} must not contain NA values.")
+  }
+
+  if (length(sheets) == 0L) {
+    cli::cli_abort("{.arg sheets} must not be empty.")
+  }
+
+  if (length(sheets) == 1L && sheets == "all") {
+    return(all_keys)
+  }
+
+  # Check for mixed positive/negative — not allowed
+  has_neg <- grepl("^-", sheets)
+  if (any(has_neg) && !all(has_neg)) {
+    cli::cli_abort(
+      "{.arg sheets} must be all positive or all negative (prefixed with {.val -}), not mixed."
+    )
+  }
+
+  # Negative selection: exclude specified keys
+  if (all(has_neg)) {
+    exclude <- sub("^-", "", sheets)
+    invalid <- setdiff(exclude, all_keys)
+    if (length(invalid) > 0L) {
+      cli::cli_warn("Unknown sheet keys (ignored): {.val {invalid}}")
+    }
+    return(setdiff(all_keys, exclude))
+  }
+
+  # Positive selection: include only specified keys (+ always README)
+  invalid <- setdiff(sheets, all_keys)
+  if (length(invalid) > 0L) {
+    cli::cli_warn("Unknown sheet keys (ignored): {.val {invalid}}")
+  }
+  selected <- intersect(sheets, all_keys)
+  # Always include README
+  selected <- unique(c("readme", selected))
+  # Maintain registry order
+  all_keys[all_keys %in% selected]
+}
+
+
+# =============================================================================
+# Sheet Builder Functions
+# =============================================================================
+
+#' Build Sheet: Guide (README)
+#' @keywords internal
+.build_sheet_readme <- function(ctx) {
+  df <- dplyr::tibble(
+    Section = c(
+      "Report Overview",
+      "Sheet: Check Summary",
+      "Sheet: Duplicate IDs",
+      "Sheet: Outliers",
+      "Sheet: Logic Errors",
+      "Sheet: Constraint Violations",
+      "Sheet: Other Specify",
+      "Sheet: Missing Data",
+      "Sheet: Skip Violations",
+      "Sheet: Progress Tracker",
+      "Sheet: GPS Issues",
+      "Sheet: Timing Issues",
+      "Sheet: Fabrication Flags",
+      "Sheet: Enumerator Performance",
+      "Sheet: All Flags",
+      "Sheet: Corrections Log",
+      "Sheet: Back-Check Results",
+      "Sheet: Field Comments",
+      "Severity: error",
+      "Severity: warning",
+      "Severity: info",
+      "Action Column",
+      "Corrections Sheet",
+      "Generated By"
+    ),
+    Description = c(
+      "This workbook contains high-frequency data quality check results. Each sheet focuses on a specific category of issues found in the survey data.",
+      "One row per check executed, showing pass/fail status and the number of flagged observations.",
+      "Records with duplicate household or respondent IDs that require deduplication.",
+      "Observations with values outside expected ranges (IQR or SD-based outlier detection).",
+      "Records failing logical consistency checks between related variables.",
+      "Values violating hard range constraints, negative value checks, or other data constraints.",
+      "Free-text responses in 'other (specify)' fields that may need recoding into existing categories.",
+      "Variables with high rates of missing values or records where all key variables are missing.",
+      "Records where skip pattern logic was violated (answered questions that should have been skipped, or vice versa).",
+      "Survey progress tracking: daily submission counts, completion rates, and target monitoring.",
+      "Records with GPS coordinate issues: missing coordinates, low accuracy, or coordinates outside expected areas.",
+      "Records with interview duration issues: too short, too long, or unusual timing patterns.",
+      "Indicators of potential data fabrication: low variance within enumerator, identical response patterns, suspicious timing.",
+      "Per-enumerator performance metrics: survey counts, flag rates, errors, and productivity indicators.",
+      "Master list of all flagged records across all checks, sorted by severity.",
+      "Template for recording corrections. Use the Action column dropdown (replace/drop/okay/pending) to track resolution.",
+      "Back-check comparison results: re-interview coverage and response match rates.",
+      "Free-text field comments and paradata notes from enumerators.",
+      "Must fix before data can be used. These are critical data quality issues.",
+      "Should review. These are potential issues that may or may not require correction.",
+      "For your information. These are minor observations that do not require action.",
+      "Use the Action column in All Flags to mark how each flag was resolved: replace (correct the value), drop (remove the record), okay (flag reviewed, no action needed), pending (not yet reviewed).",
+      "Use the Corrections Log sheet to document all data changes. Fill in: id, variable, old_value, new_value, action, and reason.",
+      "Generated by the afcestDataCheck R package."
+    )
+  )
+  list(df = df, title = "Guide")
+}
+
+
+#' Build Sheet: Check Summary
+#' @keywords internal
+.build_sheet_summary <- function(ctx) {
+  stbl <- ctx$summary_tbl
+  if (nrow(stbl) == 0L) {
+    df <- dplyr::tibble(
+      check_name = character(), check_category = character(),
+      n_flagged = integer(), n_total = integer(),
+      pct_flagged = numeric(), severity = character(),
+      status = character()
+    )
+    return(list(df = df, title = "Check Summary"))
+  }
+
+  df <- dplyr::tibble(
+    check_name     = stbl$check_name,
+    check_category = if ("check_category" %in% names(stbl)) stbl$check_category else NA_character_,
+    n_flagged      = stbl$n_flagged,
+    n_total        = if ("n_total" %in% names(stbl)) stbl$n_total else NA_integer_,
+    pct_flagged    = if ("pct_flagged" %in% names(stbl)) stbl$pct_flagged else NA_real_,
+    severity       = stbl$severity,
+    status         = ifelse(stbl$n_flagged == 0L, "PASS", "FAIL")
+  )
+  list(df = df, title = "Check Summary")
+}
+
+
+#' Build Sheet: Duplicate IDs
+#' @keywords internal
+.build_sheet_duplicates <- function(ctx) {
+  ft <- ctx$flagged_tbl
+  if (nrow(ft) == 0L) {
+    df <- dplyr::tibble(message = "No issues found in this category.")
+    return(list(df = df, title = "Duplicate IDs"))
+  }
+
+  mask <- (!is.na(ft$check_category) & ft$check_category == "identification") |
+          grepl("duplicate", ft$check_name, ignore.case = TRUE)
+  subset <- ft[mask, , drop = FALSE]
+  if (nrow(subset) == 0L) {
+    df <- dplyr::tibble(message = "No issues found in this category.")
+    return(list(df = df, title = "Duplicate IDs"))
+  }
+
+  # Build output with data columns if available
+  if (!is.null(ctx$data) && !is.null(ctx$id_col) &&
+      ctx$id_col %in% names(ctx$data)) {
+    dup_ids <- unique(subset$id)
+    ids_lookup <- as_id(ctx$data[[ctx$id_col]])
+    match_rows <- ids_lookup %in% as_id(dup_ids)
+    if (any(match_rows)) {
+      dup_data <- ctx$data[match_rows, , drop = FALSE]
+      # Add flag info
+      flag_info <- unique(subset[, c("id", "check_name", "flag_reason", "severity"),
+                                  drop = FALSE])
+      dup_data$`.merge_id` <- as_id(dup_data[[ctx$id_col]])
+      flag_info$`.merge_id` <- as_id(flag_info$id)
+      df <- merge(dup_data, flag_info[, c(".merge_id", "check_name",
+                                           "flag_reason", "severity")],
+                  by = ".merge_id", all.x = TRUE,
+                  suffixes = c("", ".flag"))
+      df$`.merge_id` <- NULL
+      return(list(df = dplyr::as_tibble(df), title = "Duplicate IDs"))
+    }
+  }
+
+  # Fallback: just the flagged table subset
+  cols <- intersect(c("id", "enumerator", "date", "check_name",
+                       "flag_reason", "severity"), names(subset))
+  df <- subset[, cols, drop = FALSE]
+  list(df = dplyr::as_tibble(df), title = "Duplicate IDs")
+}
+
+
+#' Build Sheet: Outliers
+#' @keywords internal
+.build_sheet_outliers <- function(ctx) {
+  ft <- ctx$flagged_tbl
+  if (nrow(ft) == 0L) {
+    df <- dplyr::tibble(message = "No issues found in this category.")
+    return(list(df = df, title = "Outliers"))
+  }
+
+  mask <- !is.na(ft$check_category) & ft$check_category == "outliers"
+  subset <- ft[mask, , drop = FALSE]
+  if (nrow(subset) == 0L) {
+    df <- dplyr::tibble(message = "No issues found in this category.")
+    return(list(df = df, title = "Outliers"))
+  }
+
+  cols <- intersect(c("id", "enumerator", "variable", "value",
+                       "flag_reason", "severity"), names(subset))
+  df <- subset[, cols, drop = FALSE]
+  list(df = dplyr::as_tibble(df), title = "Outliers")
+}
+
+
+#' Build Sheet: Logic Errors
+#' @keywords internal
+.build_sheet_logic <- function(ctx) {
+  ft <- ctx$flagged_tbl
+  if (nrow(ft) == 0L) {
+    df <- dplyr::tibble(message = "No issues found in this category.")
+    return(list(df = df, title = "Logic Errors"))
+  }
+
+  mask <- !is.na(ft$check_category) & ft$check_category == "logic"
+  subset <- ft[mask, , drop = FALSE]
+  if (nrow(subset) == 0L) {
+    df <- dplyr::tibble(message = "No issues found in this category.")
+    return(list(df = df, title = "Logic Errors"))
+  }
+
+  cols <- intersect(c("id", "enumerator", "variable", "value",
+                       "check_name", "flag_reason", "severity"), names(subset))
+  df <- subset[, cols, drop = FALSE]
+  list(df = dplyr::as_tibble(df), title = "Logic Errors")
+}
+
+
+#' Build Sheet: Constraint Violations
+#' @keywords internal
+.build_sheet_constraints <- function(ctx) {
+  ft <- ctx$flagged_tbl
+  if (nrow(ft) == 0L) {
+    df <- dplyr::tibble(message = "No issues found in this category.")
+    return(list(df = df, title = "Constraint Violations"))
+  }
+
+  mask <- grepl("hard_range|negative|constraint", ft$check_name, ignore.case = TRUE)
+  subset <- ft[mask, , drop = FALSE]
+  if (nrow(subset) == 0L) {
+    df <- dplyr::tibble(message = "No issues found in this category.")
+    return(list(df = df, title = "Constraint Violations"))
+  }
+
+  cols <- intersect(c("id", "enumerator", "variable", "value",
+                       "check_name", "flag_reason", "severity"), names(subset))
+  df <- subset[, cols, drop = FALSE]
+  if ("check_name" %in% names(df)) {
+    names(df)[names(df) == "check_name"] <- "constraint_type"
+  }
+  list(df = dplyr::as_tibble(df), title = "Constraint Violations")
+}
+
+
+#' Build Sheet: Other Specify
+#' @keywords internal
+.build_sheet_other_specify <- function(ctx) {
+  ft <- ctx$flagged_tbl
+  if (nrow(ft) == 0L) {
+    df <- dplyr::tibble(message = "No issues found in this category.")
+    return(list(df = df, title = "Other Specify"))
+  }
+
+  mask <- grepl("other_specify", ft$check_name, ignore.case = TRUE)
+  subset <- ft[mask, , drop = FALSE]
+  if (nrow(subset) == 0L) {
+    df <- dplyr::tibble(message = "No issues found in this category.")
+    return(list(df = df, title = "Other Specify"))
+  }
+
+  cols <- intersect(c("id", "enumerator", "variable", "value",
+                       "flag_reason", "severity"), names(subset))
+  df <- subset[, cols, drop = FALSE]
+  list(df = dplyr::as_tibble(df), title = "Other Specify")
+}
+
+
+#' Build Sheet: Missing Data
+#' @keywords internal
+.build_sheet_all_missing <- function(ctx) {
+  results <- ctx$results
+  if (length(results) == 0L) {
+    df <- dplyr::tibble(message = "No issues found in this category.")
+    return(list(df = df, title = "Missing Data"))
+  }
+
+  # Collect missing-related checks from results
+  rows <- list()
+  for (cr in results) {
+    if (!is_check_result(cr)) next
+    is_missing <- grepl("all_missing", cr$check_name, ignore.case = TRUE) ||
+      (isTRUE(cr$check_category == "completeness") &&
+       grepl("missing_variable", cr$check_name, ignore.case = TRUE))
+    if (!is_missing) next
+
+    variable <- .extract_variable_from_check(cr$check_name)
+    # Try to extract stats from summary_stat
+    n_miss <- cr$n_flagged
+    pct_miss <- NA_real_
+    if (is.list(cr$summary_stat)) {
+      if (!is.null(cr$summary_stat$n_missing)) n_miss <- cr$summary_stat$n_missing
+      if (!is.null(cr$summary_stat$pct_missing)) pct_miss <- cr$summary_stat$pct_missing
+    }
+    rows[[length(rows) + 1L]] <- dplyr::tibble(
+      variable    = if (!is.null(variable) && !is.na(variable)) variable else cr$check_name,
+      n_missing   = as.integer(n_miss),
+      pct_missing = as.numeric(pct_miss),
+      severity    = cr$severity
+    )
+  }
+
+  if (length(rows) == 0L) {
+    df <- dplyr::tibble(message = "No issues found in this category.")
+    return(list(df = df, title = "Missing Data"))
+  }
+  df <- dplyr::bind_rows(rows)
+  list(df = df, title = "Missing Data")
+}
+
+
+#' Build Sheet: Skip Violations
+#' @keywords internal
+.build_sheet_skip_patterns <- function(ctx) {
+  ft <- ctx$flagged_tbl
+  if (nrow(ft) == 0L) {
+    df <- dplyr::tibble(message = "No issues found in this category.")
+    return(list(df = df, title = "Skip Violations"))
+  }
+
+  mask <- grepl("skip_pattern", ft$check_name, ignore.case = TRUE)
+  subset <- ft[mask, , drop = FALSE]
+  if (nrow(subset) == 0L) {
+    df <- dplyr::tibble(message = "No issues found in this category.")
+    return(list(df = df, title = "Skip Violations"))
+  }
+
+  cols <- intersect(c("id", "enumerator", "variable", "value",
+                       "flag_reason", "severity"), names(subset))
+  df <- subset[, cols, drop = FALSE]
+  list(df = dplyr::as_tibble(df), title = "Skip Violations")
+}
+
+
+#' Build Sheet: Progress Tracker
+#' @keywords internal
+.build_sheet_survey_tracking <- function(ctx) {
+  results <- ctx$results
+  if (length(results) == 0L) {
+    df <- dplyr::tibble(message = "No issues found in this category.")
+    return(list(df = df, title = "Progress Tracker"))
+  }
+
+  rows <- list()
+  for (cr in results) {
+    if (!is_check_result(cr)) next
+    if (!grepl("survey_tracking", cr$check_name, ignore.case = TRUE)) next
+    # Extract summary_stat data if available
+    if (is.list(cr$summary_stat) && length(cr$summary_stat) > 0) {
+      stat_df <- tryCatch(
+        dplyr::as_tibble(cr$summary_stat),
+        error = function(e) {
+          dplyr::tibble(
+            check_name = cr$check_name,
+            n_flagged  = cr$n_flagged,
+            severity   = cr$severity
+          )
+        }
+      )
+      rows[[length(rows) + 1L]] <- stat_df
+    } else {
+      rows[[length(rows) + 1L]] <- dplyr::tibble(
+        check_name = cr$check_name,
+        n_flagged  = cr$n_flagged,
+        severity   = cr$severity
+      )
+    }
+  }
+
+  if (length(rows) == 0L) {
+    df <- dplyr::tibble(message = "No issues found in this category.")
+    return(list(df = df, title = "Progress Tracker"))
+  }
+  df <- dplyr::bind_rows(rows)
+  list(df = df, title = "Progress Tracker")
+}
+
+
+#' Build Sheet: GPS Issues
+#' @keywords internal
+.build_sheet_gps <- function(ctx) {
+  ft <- ctx$flagged_tbl
+  if (nrow(ft) == 0L) {
+    df <- dplyr::tibble(message = "No issues found in this category.")
+    return(list(df = df, title = "GPS Issues"))
+  }
+
+  mask <- !is.na(ft$check_category) & ft$check_category == "gps"
+  subset <- ft[mask, , drop = FALSE]
+  if (nrow(subset) == 0L) {
+    df <- dplyr::tibble(message = "No issues found in this category.")
+    return(list(df = df, title = "GPS Issues"))
+  }
+
+  base_cols <- intersect(c("id", "enumerator"), names(subset))
+  # Rename check_name to check_type
+  df <- subset[, base_cols, drop = FALSE]
+  df$check_type <- subset$check_name
+
+  # Add GPS columns if available
+  if ("gps_lat" %in% names(subset)) df$gps_lat <- subset$gps_lat
+  if ("gps_lon" %in% names(subset)) df$gps_lon <- subset$gps_lon
+
+  # Add gps_accuracy from data if available
+  if (!is.null(ctx$data) && !is.null(ctx$id_col)) {
+    acc_candidates <- c("gps_accuracy", "accuracy", "_geopoint_accuracy")
+    acc_col <- intersect(acc_candidates, names(ctx$data))
+    if (length(acc_col) > 0) {
+      ids_lookup <- as_id(ctx$data[[ctx$id_col]])
+      match_idx <- match(as_id(subset$id), ids_lookup)
+      df$gps_accuracy <- ifelse(is.na(match_idx), NA_real_,
+                                 ctx$data[[acc_col[1]]][match_idx])
+    }
+  }
+
+  df$flag_reason <- subset$flag_reason
+  df$severity <- subset$severity
+  list(df = dplyr::as_tibble(df), title = "GPS Issues")
+}
+
+
+#' Build Sheet: Timing Issues
+#' @keywords internal
+.build_sheet_timing <- function(ctx) {
+  ft <- ctx$flagged_tbl
+  if (nrow(ft) == 0L) {
+    df <- dplyr::tibble(message = "No issues found in this category.")
+    return(list(df = df, title = "Timing Issues"))
+  }
+
+  mask <- !is.na(ft$check_category) & ft$check_category == "timing"
+  subset <- ft[mask, , drop = FALSE]
+  if (nrow(subset) == 0L) {
+    df <- dplyr::tibble(message = "No issues found in this category.")
+    return(list(df = df, title = "Timing Issues"))
+  }
+
+  base_cols <- intersect(c("id", "enumerator"), names(subset))
+  df <- subset[, base_cols, drop = FALSE]
+  df$check_type <- subset$check_name
+
+  # Add date if available
+  if ("date" %in% names(subset)) df$date <- subset$date
+
+  # Add duration if available
+  if ("duration" %in% names(subset)) df$duration <- subset$duration
+
+  df$flag_reason <- subset$flag_reason
+  df$severity <- subset$severity
+  list(df = dplyr::as_tibble(df), title = "Timing Issues")
+}
+
+
+#' Build Sheet: Fabrication Flags
+#' @keywords internal
+.build_sheet_fabrication <- function(ctx) {
+  ft <- ctx$flagged_tbl
+  results <- ctx$results
+  if (nrow(ft) == 0L) {
+    df <- dplyr::tibble(message = "No issues found in this category.")
+    return(list(df = df, title = "Fabrication Flags"))
+  }
+
+  mask <- !is.na(ft$check_category) & ft$check_category == "fabrication"
+  subset <- ft[mask, , drop = FALSE]
+  if (nrow(subset) == 0L) {
+    df <- dplyr::tibble(message = "No issues found in this category.")
+    return(list(df = df, title = "Fabrication Flags"))
+  }
+
+  base_cols <- intersect(c("id", "enumerator"), names(subset))
+  df <- subset[, base_cols, drop = FALSE]
+  df$check_name <- subset$check_name
+  df$flag_reason <- subset$flag_reason
+  df$severity <- subset$severity
+
+  # Add relevant summary_stat values from results
+  for (cr in results) {
+    if (!is_check_result(cr)) next
+    if (!isTRUE(cr$check_category == "fabrication")) next
+    if (is.list(cr$summary_stat) && length(cr$summary_stat) > 0) {
+      for (stat_name in names(cr$summary_stat)) {
+        col_name <- paste0("stat_", stat_name)
+        if (!col_name %in% names(df)) {
+          df[[col_name]] <- rep(NA_character_, nrow(df))
+        }
+        cr_rows <- df$check_name == cr$check_name
+        if (any(cr_rows)) {
+          val <- cr$summary_stat[[stat_name]]
+          if (length(val) == 1L) {
+            df[[col_name]][cr_rows] <- val
+          }
+        }
+      }
+    }
+  }
+
+  list(df = dplyr::as_tibble(df), title = "Fabrication Flags")
+}
+
+
+#' Build Sheet: Enumerator Performance
+#' @keywords internal
+.build_sheet_enumerator <- function(ctx) {
+  if (is.null(ctx$enum_col) || is.null(ctx$data)) {
+    df <- dplyr::tibble(message = "No issues found in this category.")
+    return(list(df = df, title = "Enumerator Performance"))
+  }
+
+  enum_stats <- .build_enumerator_stats(ctx$data, ctx$flagged_tbl, ctx$enum_col)
+  if (is.null(enum_stats) || nrow(enum_stats) == 0L) {
+    df <- dplyr::tibble(message = "No issues found in this category.")
+    return(list(df = df, title = "Enumerator Performance"))
+  }
+
+  # Enhance with duration and date stats if available
+  data <- ctx$data
+  enum_col <- ctx$enum_col
+  date_col <- ctx$date_col
+
+  # Duration stats
+
+  dur_candidates <- c("duration", "duration_minutes", "interview_duration")
+  dur_col <- intersect(dur_candidates, names(data))
+  if (length(dur_col) > 0) {
+    dur_col <- dur_col[1]
+    dur_vals <- as.numeric(data[[dur_col]])
+    enum_vals <- data[[enum_col]]
+    avg_dur <- tapply(dur_vals, enum_vals, function(x) { x <- x[!is.na(x)]; if (length(x) == 0L) NA_real_ else mean(x) })
+    min_dur <- tapply(dur_vals, enum_vals, function(x) { x <- x[!is.na(x)]; if (length(x) == 0L) NA_real_ else min(x) })
+    max_dur <- tapply(dur_vals, enum_vals, function(x) { x <- x[!is.na(x)]; if (length(x) == 0L) NA_real_ else max(x) })
+    dur_df <- data.frame(
+      enumerator   = names(avg_dur),
+      avg_duration = as.numeric(avg_dur),
+      min_duration = as.numeric(min_dur),
+      max_duration = as.numeric(max_dur),
+      stringsAsFactors = FALSE
+    )
+    enum_stats <- merge(enum_stats, dur_df, by = "enumerator", all.x = TRUE)
+  }
+
+  # Date stats
+  if (!is.null(date_col) && date_col %in% names(data)) {
+    date_vals <- as.character(data[[date_col]])
+    enum_vals <- data[[enum_col]]
+    first_d <- tapply(date_vals, enum_vals, function(x) { x <- x[!is.na(x) & x != ""]; if (length(x) == 0L) NA_character_ else min(x) })
+    last_d  <- tapply(date_vals, enum_vals, function(x) { x <- x[!is.na(x) & x != ""]; if (length(x) == 0L) NA_character_ else max(x) })
+    n_d     <- tapply(date_vals, enum_vals, function(x) { x <- x[!is.na(x) & x != ""]; length(unique(x)) })
+    date_df <- data.frame(
+      enumerator = names(first_d),
+      first_date = as.character(first_d),
+      last_date  = as.character(last_d),
+      n_days     = as.integer(n_d),
+      stringsAsFactors = FALSE
+    )
+    enum_stats <- merge(enum_stats, date_df, by = "enumerator", all.x = TRUE)
+  }
+
+  list(df = dplyr::as_tibble(enum_stats), title = "Enumerator Performance")
+}
+
+
+#' Build Sheet: All Flags
+#' @keywords internal
+.build_sheet_flagged <- function(ctx) {
+  ft <- ctx$flagged_tbl
+  if (nrow(ft) == 0L) {
+    df <- dplyr::tibble(message = "No flagged records found.")
+    return(list(df = df, title = "All Flags"))
+  }
+
+  # Sort: error > warning > info, then by check_name
+  sev_order <- c(error = 1L, warning = 2L, info = 3L)
+  ft$`.sev_order` <- sev_order[ft$severity]
+  ft <- ft[order(ft$`.sev_order`, ft$check_name), ]
+  ft$`.sev_order` <- NULL
+
+  list(df = dplyr::as_tibble(ft), title = "All Flags")
+}
+
+
+#' Build Sheet: Corrections Log
+#' @keywords internal
+.build_sheet_corrections <- function(ctx) {
+  df <- .build_corrections_template(ctx$flagged_tbl)
+  list(df = df, title = "Corrections Log")
+}
+
+
+#' Build Sheet: Back-Check Results
+#' @keywords internal
+.build_sheet_backcheck <- function(ctx) {
+  ft <- ctx$flagged_tbl
+  results <- ctx$results
+
+  # Filter for backcheck results
+  bc_results <- Filter(function(cr) {
+    is_check_result(cr) && isTRUE(cr$check_category == "backcheck")
+  }, results)
+
+  if (length(bc_results) == 0L) {
+    df <- dplyr::tibble(message = "No issues found in this category.")
+    return(list(df = df, title = "Back-Check Results"))
+  }
+
+  rows <- list()
+  for (cr in bc_results) {
+    row <- dplyr::tibble(
+      check_name = cr$check_name,
+      n_flagged  = cr$n_flagged,
+      severity   = cr$severity
+    )
+    # Add summary_stat values
+    if (is.list(cr$summary_stat) && length(cr$summary_stat) > 0) {
+      for (stat_name in names(cr$summary_stat)) {
+        val <- cr$summary_stat[[stat_name]]
+        if (length(val) == 1L) {
+          row[[stat_name]] <- val
+        }
+      }
+    }
+    rows[[length(rows) + 1L]] <- row
+  }
+
+  df <- dplyr::bind_rows(rows)
+
+  # If backcheck_data is provided, add coverage info
+  if (!is.null(ctx$backcheck_data) && nrow(ctx$backcheck_data) > 0) {
+    bc_summary <- dplyr::tibble(
+      check_name = "backcheck_coverage",
+      n_flagged  = NA_integer_,
+      severity   = "info",
+      n_backchecked = nrow(ctx$backcheck_data)
+    )
+    df <- dplyr::bind_rows(df, bc_summary)
+  }
+
+  list(df = df, title = "Back-Check Results")
+}
+
+
+#' Build Sheet: Field Comments
+#' @keywords internal
+.build_sheet_field_comments <- function(ctx) {
+  ft <- ctx$flagged_tbl
+  results <- ctx$results
+  rows <- list()
+
+  # Filter flagged_tbl for field_comments or paradata comment checks
+  if (nrow(ft) > 0) {
+    mask <- grepl("field_comment", ft$check_name, ignore.case = TRUE) |
+      (!is.na(ft$check_category) & ft$check_category == "paradata" &
+       grepl("comment", ft$check_name, ignore.case = TRUE))
+    subset <- ft[mask, , drop = FALSE]
+    if (nrow(subset) > 0) {
+      cols <- intersect(c("id", "enumerator", "variable", "value",
+                           "flag_reason", "severity"), names(subset))
+      rows[[length(rows) + 1L]] <- subset[, cols, drop = FALSE]
+      rows[[length(rows)]]$source <- rep("flag", nrow(rows[[length(rows)]]))
+    }
+  }
+
+  # Also scan data for a "comments" column with non-NA values
+  if (!is.null(ctx$data)) {
+    comment_cols <- intersect(c("comments", "comment", "field_comments",
+                                 "enumerator_comments", "notes"),
+                               names(ctx$data))
+    if (length(comment_cols) > 0 && !is.null(ctx$id_col) &&
+        ctx$id_col %in% names(ctx$data)) {
+      for (cc in comment_cols) {
+        vals <- ctx$data[[cc]]
+        has_val <- !is.na(vals) & vals != ""
+        if (any(has_val)) {
+          comment_df <- dplyr::tibble(
+            id       = as.character(ctx$data[[ctx$id_col]][has_val]),
+            variable = cc,
+            value    = as.character(vals[has_val])
+          )
+          if (!is.null(ctx$enum_col) && ctx$enum_col %in% names(ctx$data)) {
+            comment_df$enumerator <- as.character(
+              ctx$data[[ctx$enum_col]][has_val]
+            )
+          }
+          comment_df$source <- rep("comment", nrow(comment_df))
+          rows[[length(rows) + 1L]] <- comment_df
+        }
+      }
+    }
+  }
+
+  if (length(rows) == 0L) {
+    df <- dplyr::tibble(message = "No issues found in this category.")
+    return(list(df = df, title = "Field Comments"))
+  }
+  df <- dplyr::bind_rows(rows)
+  list(df = dplyr::as_tibble(df), title = "Field Comments")
 }

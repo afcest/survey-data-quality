@@ -27,6 +27,7 @@ Suggests:
     DBI,
     gt,
     httr2,
+    iehfc,
     knitr,
     openxlsx2,
     rmarkdown,

@@ -2,10 +2,10 @@
 # Copy this file and customize for your survey project
 
 project:
-  name: "Example Household Survey"
-  description: "Baseline data collection for rural development project"
-  survey_start: "2024-01-01"
-  survey_end: "2024-02-28"
+  name: "Living with HIV Follow-Up 2 Survey (Rwanda)"
+  description: "Follow-up household survey for HIV-affected populations in Rwanda, World Bank iehfc 2023"
+  survey_start: "2023-04-01"
+  survey_end: "2023-06-30"
   platform: "kobo"  # kobo, surveycto, odk, survey_solutions, cspro, auto
 
 variables:
@@ -23,7 +23,6 @@ variables:
   hh_size: "hh_size"
   income: "income"
   expenditure: "expenditure"
-  age: "age_head"
 
   # Optional quasi-identifiers for fingerprint duplicate detection
   quasi_ids:
@@ -41,7 +40,7 @@ checks:
     id_in_sample: false  # Set to true and provide sampling_frame
     id_format:
       enabled: true
-      pattern: "^HH_\\d{4}$"
+      pattern: "^\\d{3,5}$"
 
   # ── Metadata ────────────────────────────────────────────────────────────────
   metadata:
@@ -57,7 +56,7 @@ checks:
     missing_by_variable:
       enabled: true
       threshold: 0.05
-      exclude_cols: ["comments", "other_crop"]
+      exclude_cols: ["comments", "crop_other"]
     missing_by_enumerator:
       enabled: true
       threshold_sd: 2
@@ -72,6 +71,15 @@ checks:
       - col: "income"
         min: 0
         max: 5000000
+      - col: "income_crop"
+        min: 0
+        max: 5000000
+      - col: "crop_revenue"
+        min: 0
+        max: 10000000
+      - col: "crop_sold_qty"
+        min: 0
+        max: 50000
       - col: "yield_kg"
         min: 0
         max: 20000
@@ -115,10 +123,10 @@ checks:
     null_island: true
     boundary:
       enabled: true
-      bbox: { xmin: -6.0, xmax: 3.0, ymin: 4.0, ymax: 16.0 }  # West Africa
+      bbox: { xmin: 28.8, xmax: 30.9, ymin: -2.9, ymax: -1.0 }  # Rwanda
     swap:
       enabled: true
-      expected_bbox: { lat_min: 4.0, lat_max: 16.0, lon_min: -6.0, lon_max: 3.0 }
+      expected_bbox: { lat_min: -2.9, lat_max: -1.0, lon_min: 28.8, lon_max: 30.9 }
     clustering:
       enabled: true
       max_same_point: 3
@@ -145,8 +153,8 @@ checks:
 # Optional: skip patterns to validate
 skip_patterns:
   - parent_col: "crop_type"
-    child_col: "other_crop"
-    parent_value: "autre"
+    child_col: "crop_other"
+    parent_value: "Other"
     expect_child_na: false
 
 # Optional: sampling frame for ID validation

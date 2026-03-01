@@ -151,59 +151,40 @@ install.packages(c("robotoolbox", "rsurveycto", "ruODK"))
 This section demonstrates the core workflow: load data, run checks,
 inspect results, and export.
 
-## Step 1: Create sample data
+## Step 1: Load the bundled dataset
 
 ```{r quickstart-data}
 library(afcestDataCheck)
 
-# Simulated household survey data
-set.seed(42)
-n <- 200
+# Load the bundled dataset (1,206 rows from real World Bank iehfc survey data)
+data(survey_sample)
 
-survey <- data.frame(
-  hh_id         = sprintf("HH-%04d", 1:n),
-  enum_id       = sample(paste0("EN", 1:8), n, replace = TRUE),
-  consent       = sample(c(1, 0), n, replace = TRUE, prob = c(0.95, 0.05)),
-  date          = as.Date("2025-06-01") + sample(0:29, n, replace = TRUE),
-  duration_min  = rnorm(n, mean = 45, sd = 15),
-  hh_size       = rpois(n, lambda = 5) + 1,
-  income        = rlnorm(n, meanlog = 12, sdlog = 1),
-  expenditure   = rlnorm(n, meanlog = 11.5, sdlog = 1.2),
-  lat           = runif(n, 12.2, 12.5),
-  lon           = runif(n, -1.6, -1.3),
-  gps_accuracy  = rexp(n, rate = 0.1),
-  form_version  = sample(c("v2.1", "v2.0"), n, replace = TRUE, prob = c(0.9, 0.1)),
-  stringsAsFactors = FALSE
-)
-
-# Inject quality issues for demonstration
-survey$hh_id[5]        <- survey$hh_id[3]       # duplicate ID
-survey$duration_min[10] <- 3                      # too short
-survey$income[15]       <- 1e9                    # extreme outlier
-survey$lat[20]          <- 0                      # null island
+# Preview
+head(survey_sample[, c("hh_id", "enum_id", "submission_date", "duration",
+                        "income", "gps_lat", "gps_lon")])
 ```
 
 ## Step 2: Run individual checks
 
 ```{r quickstart-individual}
 # Check for duplicate IDs
-res_dup <- check_duplicate_ids(survey, id_col = "hh_id")
+res_dup <- check_duplicate_ids(survey_sample, id_col = "hh_id")
 print(res_dup)
 #> -- check_result: duplicate_hh_id ----
 #>   Severity : error
-#>   Flagged  : 2 observation(s)
-#>   IDs      : HH-0003, HH-0003
+#>   Flagged  : 6 observation(s)
+#>   IDs      : 5045, 5045, 5067, 5067, 5098, 5098
 
 # Check survey duration
 res_dur <- check_survey_duration(
-  survey, id_col = "hh_id", duration_col = "duration_min",
+  survey_sample, id_col = "hh_id", duration_col = "duration",
   min_duration = 15, max_duration = 120
 )
 print(res_dur)
 
 # Check GPS null island
 res_gps <- check_gps_null_island(
- survey, id_col = "hh_id", lat_col = "lat", lon_col = "lon"
+  survey_sample, id_col = "hh_id", lat_col = "gps_lat", lon_col = "gps_lon"
 )
 print(res_gps)
 ```
@@ -211,33 +192,11 @@ print(res_gps)
 ## Step 3: Run all checks via configuration
 
 ```{r quickstart-config}
-# Write a minimal YAML config
-config_text <- "
-project:
-  name: Quick Start Demo
-
-variables:
-  id: hh_id
-  enumerator: enum_id
-  date: date
-  duration: duration_min
-  gps_latitude: lat
-  gps_longitude: lon
-  consent: consent
-
-checks:
-  identification:
-    duplicate_ids: true
-    missing_ids: true
-  timing:
-    duration:
-      min_minutes: 15
-      max_minutes: 120
-  gps:
-    null_island: true
-"
-config <- read_config(textConnection(config_text))
-report <- run_all_checks(survey, config = config, verbose = TRUE)
+# Load the bundled example configuration (matches survey_sample column names)
+config <- read_config(
+  system.file("example_config.yml", package = "afcestDataCheck")
+)
+report <- run_all_checks(survey_sample, config = config, verbose = TRUE)
 print(report)
 summary(report)
 ```
@@ -246,14 +205,14 @@ summary(report)
 
 ```{r quickstart-export}
 # Export to a formatted Excel workbook
-export_to_excel(report, data = survey, id_col = "hh_id",
+export_to_excel(report, data = survey_sample, id_col = "hh_id",
                 path = "hfc_report.xlsx",
-                enum_col = "enum_id", date_col = "date")
+                enum_col = "enum_id", date_col = "submission_date")
 
 # Or export to CSV
 export_to_csv(report, output_dir = "hfc_output/",
-              data = survey, id_col = "hh_id",
-              enum_col = "enum_id", date_col = "date")
+              data = survey_sample, id_col = "hh_id",
+              enum_col = "enum_id", date_col = "submission_date")
 ```
 
 \newpage

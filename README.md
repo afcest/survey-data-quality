@@ -25,14 +25,14 @@ remotes::install_github("afcest/survey-data-quality")
 ```r
 library(afcestDataCheck)
 
-# 1. Use the bundled sample dataset (100 rows, 22 columns, with planted issues)
+# 1. Use the bundled sample dataset (1206 rows, 28 columns, with planted issues)
 data(survey_sample)
 
 # 2. Run all checks using the built-in example config
 config <- system.file("example_config.yml", package = "afcestDataCheck")
 report <- run_all_checks(survey_sample, config)
 #> ── afcestDataCheck: Example Household Survey ──
-#> ℹ 100 observations, 39 checks to run
+#> ℹ 1206 observations, 39 checks to run
 #> ✔ Done: 39 checks run, 15 with flags, 0 errors
 
 # 3. View results
@@ -50,11 +50,11 @@ Or run individual checks directly:
 ```r
 # Check for duplicate IDs
 check_duplicate_ids(survey_sample, id_col = "hh_id")
-#> [x] A01_duplicate_id: 3/100 flagged (error)
+#> [x] A01_duplicate_id: 3/1206 flagged (error)
 
 # Detect GPS null island
 check_gps_null_island(survey_sample, "hh_id", "gps_lat", "gps_lon")
-#> [x] E07_gps_null_island: 1/100 flagged (error)
+#> [x] E07_gps_null_island: 1/1206 flagged (error)
 
 # Combine multiple checks
 results <- list(
@@ -72,17 +72,17 @@ The package ships with three datasets for testing:
 
 | Dataset | Rows | Description |
 |---|---|---|
-| `survey_sample` | 100 | Household survey with 15+ planted quality issues across all 13 categories |
-| `backcheck_sample` | 15 | Back-check re-interview data with intentional mismatches |
+| `survey_sample` | 1206 | Real Rwandan household survey data (iehfc) with 15+ planted quality issues |
+| `backcheck_sample` | 20 | Back-check re-interview data with intentional mismatches |
 | `corrections_sample` | 5 | Correction log demonstrating the correction workflow |
 
 ```r
-data(survey_sample)       # 100 rows, 22 columns
-data(backcheck_sample)    # 15 rows, 9 columns
+data(survey_sample)       # 1206 rows, 28 columns
+data(backcheck_sample)    # 20 rows, 8 columns
 data(corrections_sample)  # 5 rows, 5 columns
 ```
 
-Planted issues include: duplicate IDs, GPS null island, swapped coordinates, outliers, negative values, implausible household size, future dates, short/long durations, "test" names, invalid phone numbers, and more.
+Based on real survey data from the World Bank's [iehfc](https://github.com/PovertyAction/iehfc) package (Living with HIV Follow-Up 2 survey, Rwanda, 2023). Real data naturally contains 3 duplicate household IDs, sentinel values (-88, -66) in income fields, and 2 form versions. Additional quality issues planted include: GPS null island, swapped coordinates, poor GPS accuracy, short/long durations, future dates, no consent, implausible household size, test names, and invalid phone numbers.
 
 ## Check Categories
 
@@ -261,3 +261,5 @@ MIT License. See [LICENSE](LICENSE) for details.
 ## About AfCEST
 
 The **African Center for Studies and Training (AfCEST)** is a consulting firm registered in Burkina Faso, specializing in data systems, monitoring and evaluation, and applied research for international development projects across West and Central Africa. AfCEST builds open-source tools that strengthen data quality and evidence-based decision-making in development programs.
+
+**Data acknowledgment:** The bundled `survey_sample` dataset is derived from the World Bank / IPA [iehfc](https://github.com/PovertyAction/iehfc) R package. Original data from the Living with HIV Follow-Up 2 survey (Rwanda, 2023).

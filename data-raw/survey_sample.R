@@ -1,256 +1,246 @@
 ## code to prepare `survey_sample`, `backcheck_sample`, and `corrections_sample`
+## Based on REAL survey data from the World Bank iehfc package
+## (Living with HIV Follow-Up 2 survey, Rwanda, 2023)
 
+# --- Load real data from iehfc package ---
+if (!requireNamespace("iehfc", quietly = TRUE)) {
+  stop("Install the iehfc package first: install.packages('iehfc')")
+}
+
+raw <- read.csv(
+  system.file("test_data/LWH_FUP2_raw_data.csv", package = "iehfc"),
+  stringsAsFactors = FALSE
+)
+
+n <- nrow(raw)  # 1206 observations
 set.seed(42)
 
-# --- Helper data ---
-west_african_first <- c(
- "Abdoulaye", "Aminata", "Boureima", "Fatimata", "Hamidou",
- "Issa", "Kadiatou", "Moussa", "Ousmane", "Rasmata",
- "Salamata", "Souleymane", "Zenabou", "Ibrahim", "Mariam",
- "Adama", "Bintou", "Dramane", "Fanta", "Karim",
- "Lassina", "Noufou", "Poko", "Seydou", "Tene",
- "Youssouf", "Alimata", "Boubacar", "Djamilatou", "Hamado"
+# --- Core columns from real data ---
+hh_id           <- as.character(raw$hhid)
+enum_id         <- sprintf("ENUM%03d", raw$enumerator)
+submission_date <- as.Date(raw$submissiondate, format = "%m/%d/%Y")
+device_id       <- as.character(raw$device_id)
+form_version    <- ifelse(raw$formdef_version == 2305021814, "v2", "v1")
+province        <- raw$province
+district        <- raw$district
+sector          <- raw$sector
+village         <- raw$village
+income          <- raw$inc_1
+income_crop     <- raw$inc_2
+expenditure     <- raw$exp_25_1
+crop_type       <- raw$a_crop_c1_p1
+crop_other      <- raw$a_crop_c1_p1_other
+yield_kg        <- raw$crp08qa_c1_p1
+crop_sold_qty   <- raw$crp09qa_c1_p1
+crop_revenue    <- raw$crp10a_c1_p1
+
+# --- Synthetic but realistic augmented columns ---
+
+# GPS: centered on Kayonza (-1.85, 30.55) and Rwamagana (-1.95, 30.43)
+gps_lat <- ifelse(
+  district == "Kayonza",
+  round(rnorm(n, mean = -1.85, sd = 0.08), 6),
+  round(rnorm(n, mean = -1.95, sd = 0.08), 6)
 )
-west_african_last <- c(
- "Ouedraogo", "Sawadogo", "Kabore", "Traore", "Coulibaly",
- "Diallo", "Compaore", "Zongo", "Bamba", "Sanou",
- "Konate", "Ilboudo", "Nikiema", "Zoungrana", "Bationo",
- "Sanogo", "Sorgho", "Thiombiano", "Dembele", "Yameogo"
+gps_lon <- ifelse(
+  district == "Kayonza",
+  round(rnorm(n, mean = 30.55, sd = 0.10), 6),
+  round(rnorm(n, mean = 30.43, sd = 0.10), 6)
+)
+gps_accuracy <- round(runif(n, 3, 15), 1)
+
+# Start/end times: realistic interview times
+start_hours   <- sample(7:16, n, replace = TRUE)
+start_minutes <- sample(0:59, n, replace = TRUE)
+start <- as.POSIXct(
+  paste(submission_date, sprintf("%02d:%02d:00", start_hours, start_minutes)),
+  tz = "Africa/Kigali"
 )
 
-crop_types <- c("mil", "sorgho", "mais", "riz", "niebe",
-                "arachide", "sesame", "coton", "autre")
+# Duration: 25-90 min with realistic distribution
+duration <- round(rlnorm(n, meanlog = log(40), sdlog = 0.35), 1)
+end <- start + duration * 60
 
-enumerator_ids <- c("ENUM01", "ENUM02", "ENUM03", "ENUM04", "ENUM05", "ENUM06")
-device_ids <- c("DEV_A1", "DEV_A2", "DEV_B1", "DEV_C1", "DEV_D1", "DEV_E1")
+# Consent
+consent <- rep("yes", n)
 
-n <- 100
+# Household size: Poisson + 1, realistic for Rwanda
+hh_size <- as.integer(rpois(n, lambda = 4) + 1)
+
+# Rwandan names
+rwandan_first <- c(
+  "Jean", "Marie", "Pierre", "Therese", "Emmanuel", "Claudine",
+  "Francois", "Jeanne", "Joseph", "Vestine", "Patrick", "Alphonsine",
+  "Eric", "Goretti", "Innocent", "Dancille", "Alexis", "Esperance",
+  "Denis", "Jacqueline", "Augustin", "Beata", "Celestin", "Consolee",
+  "Dieudonne", "Felicite", "Gabriel", "Illuminee", "Janvier", "Bernadette"
+)
+rwandan_last <- c(
+  "Uwimana", "Habimana", "Mukamana", "Niyonzima", "Ndayisaba",
+  "Uwera", "Bizimana", "Mukagatare", "Nsengiyumva", "Nyiraneza",
+  "Hakizimana", "Mukamusoni", "Ingabire", "Twagirimana", "Mutesi",
+  "Nshimiyimana", "Umutoni", "Kamanzi", "Mukeshimana", "Rugamba"
+)
+name_head <- paste(
+  sample(rwandan_first, n, replace = TRUE),
+  sample(rwandan_last, n, replace = TRUE)
+)
+
+# Phone numbers: Rwanda format 078X XXX XXX / 072X / 073X
+phone_prefix <- sample(c("078", "072", "073"), n, replace = TRUE)
+phone <- sprintf("%s %03d %03d",
+                 phone_prefix,
+                 sample(100:999, n, replace = TRUE),
+                 sample(100:999, n, replace = TRUE))
+
+# Comments: mostly NA
+comments <- rep(NA_character_, n)
+
+# --- Plant additional quality issues ---
+# (The real data already has: 3 duplicate hhids, -88/-66 sentinel values in income,
+#  extreme outliers, 2 form versions)
+
+# GPS null island (row 1100)
+gps_lat[1100] <- 0
+gps_lon[1100] <- 0
+gps_accuracy[1100] <- 5.0
+
+# GPS swapped lat/lon (row 1101)
+gps_lat[1101] <- 30.55   # should be longitude
+gps_lon[1101] <- -1.85   # should be latitude
+
+# GPS poor accuracy (row 1102)
+gps_accuracy[1102] <- 200
+
+# Very short duration (row 1103)
+duration[1103] <- 2
+end[1103] <- start[1103] + 120
+
+# Very long duration (row 1104)
+duration[1104] <- 300
+end[1104] <- start[1104] + 18000
+
+# Future date (row 1105)
+submission_date[1105] <- Sys.Date() + 30
+start[1105] <- as.POSIXct(paste(submission_date[1105], "09:00:00"), tz = "Africa/Kigali")
+end[1105] <- start[1105] + 2400
+
+# No consent (rows 1106-1107)
+consent[1106] <- "no"
+consent[1107] <- "no"
+
+# Implausible household size (row 1108)
+hh_size[1108] <- 55L
+
+# Test name (row 1109)
+name_head[1109] <- "test"
+
+# Single character name (row 1110)
+name_head[1110] <- "X"
+
+# Invalid phone (row 1111)
+phone[1111] <- "12"
+
+# Comments for paradata check
+comments[50] <- "Le chef de menage etait absent, interview avec l'epouse"
+comments[51] <- "Route inondee, difficulte d'acces"
+comments[200] <- "Respondent was hesitant, needed extra explanation"
 
 # --- Build survey_sample ---
-
-# hh_id: unique with 3 intentional duplicates (rows 98-100 duplicate 1-3)
-hh_ids <- sprintf("HH_%04d", 1:n)
-hh_ids[98] <- hh_ids[1]
-hh_ids[99] <- hh_ids[2]
-hh_ids[100] <- hh_ids[3]
-
-# enum_id: ENUM03 is suspiciously productive (40 surveys)
-enum_probs <- c(0.12, 0.12, 0.40, 0.12, 0.12, 0.12)
-enum_ids <- sample(enumerator_ids, n, replace = TRUE, prob = enum_probs)
-
-# Dates: mostly within the collection window 2024-01-01 to 2024-02-28
-base_dates <- as.Date("2024-01-01") + sample(0:58, n, replace = TRUE)
-# Row 95: future date
-base_dates[95] <- Sys.Date() + 30
-# Row 96: outside collection window (too early)
-base_dates[96] <- as.Date("2023-11-01")
-
-# Start/end times
-start_hours <- sample(7:16, n, replace = TRUE)
-start_minutes <- sample(0:59, n, replace = TRUE)
-start_times <- as.POSIXct(
-  paste(base_dates, sprintf("%02d:%02d:00", start_hours, start_minutes)),
-  tz = "UTC"
-)
-
-# Duration: mostly 25-90 min; row 90 very short, row 91 very long
-durations <- round(runif(n, 25, 90), 1)
-durations[90] <- 3   # too short
-durations[91] <- 210 # too long
-
-end_times <- start_times + durations * 60
-
-# GPS: around Ouagadougou (~12.37, -1.52)
-gps_lat <- round(rnorm(n, mean = 12.37, sd = 0.03), 6)
-gps_lon <- round(rnorm(n, mean = -1.52, sd = 0.03), 6)
-gps_accuracy <- round(runif(n, 3, 10), 1)
-
-# Row 85: null island
-gps_lat[85] <- 0
-gps_lon[85] <- 0
-gps_accuracy[85] <- 5.0
-
-# Row 86: swapped lat/lon
-gps_lat[86] <- -1.52
-gps_lon[86] <- 12.37
-
-# Row 87: poor accuracy
-gps_accuracy[87] <- 150
-
-# Consent: mostly "yes", 2 "no"
-consent <- rep("yes", n)
-consent[c(92, 93)] <- "no"
-
-# Form version
-form_version <- rep("v1", n)
-form_version[c(88, 89)] <- "v2"
-
-# hh_size: 1-15 with one implausible
-hh_size <- sample(2:12, n, replace = TRUE)
-hh_size[80] <- 50
-
-# Income (CFA francs): realistic range 50k-500k
-income <- round(runif(n, 50000, 500000), 0)
-income[75] <- -15000       # negative
-income[76] <- 5000000      # extreme outlier
-income[77] <- 8500000      # extreme outlier
-
-# Expenditure (CFA francs)
-expenditure <- round(income * runif(n, 0.4, 0.9), 0)
-# Row 78: expenditure >> income
-expenditure[78] <- income[78] * 4
-
-# Age of household head
-age_head <- sample(25:65, n, replace = TRUE)
-age_head[82] <- 3  # implausible
-
-# Name of household head
-name_head <- paste(
-  sample(west_african_first, n, replace = TRUE),
-  sample(west_african_last, n, replace = TRUE)
-)
-name_head[83] <- "test"   # test entry
-name_head[84] <- "A"      # single character
-
-# Phone numbers (Burkina format: 7X XX XX XX)
-phone <- sprintf("7%d %02d %02d %02d",
-                 sample(0:9, n, replace = TRUE),
-                 sample(10:99, n, replace = TRUE),
-                 sample(10:99, n, replace = TRUE),
-                 sample(10:99, n, replace = TRUE))
-phone[81] <- "123"  # too short
-
-# Crop type
-crop_type <- sample(crop_types, n, replace = TRUE)
-
-# Yield (kg/ha)
-yield_kg <- round(runif(n, 200, 2500), 0)
-yield_kg[74] <- 15000  # extreme outlier
-yield_kg[73] <- 18000  # extreme outlier
-
-# Other crop: mostly NA, a few with text when crop_type == "autre"
-other_crop <- rep(NA_character_, n)
-autre_rows <- which(crop_type == "autre")
-if (length(autre_rows) > 0) {
-  other_crop[autre_rows] <- sample(
-    c("fonio", "patate douce", "igname", "manioc"),
-    length(autre_rows), replace = TRUE
-  )
-}
-# Add a couple non-"autre" rows with other_crop filled (for check testing)
-other_crop[70] <- "oignon"
-other_crop[71] <- "tomate"
-
-# Device IDs: map from enum, but ENUM02 uses two devices
-device_map <- c(
-  ENUM01 = "DEV_A1", ENUM02 = "DEV_B1", ENUM03 = "DEV_C1",
-  ENUM04 = "DEV_D1", ENUM05 = "DEV_E1", ENUM06 = "DEV_A2"
-)
-device_id <- unname(device_map[enum_ids])
-# Make ENUM02 use a second device for some entries
-enum02_rows <- which(enum_ids == "ENUM02")
-if (length(enum02_rows) >= 2) {
-  device_id[enum02_rows[1:min(2, length(enum02_rows))]] <- "DEV_B2"
-}
-
-# Comments
-comments <- rep(NA_character_, n)
-comments[60] <- "Le chef de menage etait absent, entretien avec l'epouse"
-comments[61] <- "Route inondee, difficulte d'acces au village"
-
-# Submission date (matches config variable name "submission_date")
-submission_date <- base_dates
-
-# Build the data frame
 survey_sample <- data.frame(
-  hh_id           = hh_ids,
-  enum_id         = enum_ids,
+  hh_id           = hh_id,
+  enum_id         = enum_id,
   submission_date = submission_date,
-  start           = start_times,
-  end             = end_times,
-  duration        = durations,
+  start           = start,
+  end             = end,
+  duration        = duration,
   gps_lat         = gps_lat,
   gps_lon         = gps_lon,
   gps_accuracy    = gps_accuracy,
   consent         = consent,
   form_version    = form_version,
-  hh_size         = as.integer(hh_size),
+  hh_size         = hh_size,
   income          = income,
+  income_crop     = income_crop,
   expenditure     = expenditure,
-  age_head        = as.integer(age_head),
+  crop_type       = crop_type,
+  crop_other      = crop_other,
+  yield_kg        = yield_kg,
+  crop_sold_qty   = crop_sold_qty,
+  crop_revenue    = crop_revenue,
+  province        = province,
+  district        = district,
+  sector          = sector,
+  village         = village,
   name_head       = name_head,
   phone           = phone,
-  crop_type       = crop_type,
-  yield_kg        = yield_kg,
-  other_crop      = other_crop,
   device_id       = device_id,
   comments        = comments,
   stringsAsFactors = FALSE
 )
 
 # --- Build backcheck_sample ---
-
-# Select 15 hh_ids from survey (first occurrence only, no duplicates)
-bc_hh_ids <- hh_ids[c(5, 12, 18, 25, 33, 40, 47, 55, 60, 65,
-                       70, 74, 78, 82, 88)]
+# Select 20 real unique hh_ids (non-duplicated)
+unique_ids <- unique(hh_id)
+bc_hh_ids <- unique_ids[c(10, 25, 50, 75, 100, 150, 200, 250, 300,
+                           350, 400, 450, 500, 550, 600, 650, 700,
+                           750, 800, 850)]
+bc_rows <- match(bc_hh_ids, hh_id)
 
 set.seed(123)
-bc_enum_ids <- sample(c("BC_ENUM01", "BC_ENUM02", "BC_ENUM03"), 15,
+bc_enum_ids <- sample(c("BC_ENUM01", "BC_ENUM02", "BC_ENUM03"), 20,
                       replace = TRUE)
 
-# Pull original values and introduce mismatches
-orig_rows <- match(bc_hh_ids, hh_ids)
-bc_hh_size    <- survey_sample$hh_size[orig_rows]
-bc_income     <- survey_sample$income[orig_rows]
-bc_crop_type  <- survey_sample$crop_type[orig_rows]
-bc_consent    <- survey_sample$consent[orig_rows]
-bc_age_head   <- survey_sample$age_head[orig_rows]
-bc_yield_kg   <- survey_sample$yield_kg[orig_rows]
+# Pull original values
+bc_consent   <- survey_sample$consent[bc_rows]
+bc_hh_size   <- survey_sample$hh_size[bc_rows]
+bc_income    <- survey_sample$income[bc_rows]
+bc_crop_type <- survey_sample$crop_type[bc_rows]
+bc_yield_kg  <- survey_sample$yield_kg[bc_rows]
 
-# Type 1 mismatches (consent — should match exactly)
-bc_consent[3] <- "no"  # was "yes" in original
+# Introduce mismatches
+# Type 1: consent should match exactly
+bc_consent[3] <- "no"  # mismatch
 
-# Type 2 mismatches (hh_size — categorical/ordinal, small difference ok)
-bc_hh_size[5] <- bc_hh_size[5] + 2
-bc_hh_size[8] <- bc_hh_size[8] - 1
+# Type 2: hh_size small differences
+bc_hh_size[5] <- bc_hh_size[5] + 2L
+bc_hh_size[8] <- max(1L, bc_hh_size[8] - 1L)
+bc_hh_size[12] <- bc_hh_size[12] + 1L
 
-# Type 3 mismatches (income — continuous, relative difference)
-bc_income[2]  <- round(bc_income[2] * 1.35, 0)   # 35% difference
-bc_income[7]  <- round(bc_income[7] * 0.60, 0)   # 40% difference
-bc_income[10] <- round(bc_income[10] * 1.05, 0)  # 5% difference (within tolerance)
-
-# Age mismatch
-bc_age_head[4] <- bc_age_head[4] + 5
+# Type 3: income continuous tolerance
+bc_income[2]  <- round(bc_income[2] * 1.40, 0)   # 40% difference
+bc_income[7]  <- round(bc_income[7] * 0.55, 0)   # 45% difference
+bc_income[10] <- round(bc_income[10] * 1.05, 0)  # 5% (within tolerance)
+bc_income[15] <- round(bc_income[15] * 1.25, 0)  # 25% difference
 
 # Yield mismatch
-bc_yield_kg[6] <- round(bc_yield_kg[6] * 1.50, 0)
+bc_yield_kg[6]  <- round(bc_yield_kg[6] * 1.60, 0)  # 60% difference
+bc_yield_kg[14] <- round(bc_yield_kg[14] * 0.70, 0)  # 30% difference
 
 backcheck_sample <- data.frame(
-  bc_id       = sprintf("BC_%03d", 1:15),
+  bc_id       = sprintf("BC_%03d", seq_along(bc_hh_ids)),
   hh_id       = bc_hh_ids,
   bc_enum_id  = bc_enum_ids,
   consent     = bc_consent,
   hh_size     = as.integer(bc_hh_size),
   income      = bc_income,
-  age_head    = as.integer(bc_age_head),
   crop_type   = bc_crop_type,
   yield_kg    = bc_yield_kg,
   stringsAsFactors = FALSE
 )
 
 # --- Build corrections_sample ---
-
 corrections_sample <- data.frame(
-  hh_id     = c("HH_0080", "HH_0075", "HH_0082", "HH_0083", "HH_0081"),
-  variable  = c("hh_size", "income", "age_head", "name_head", "phone"),
-  old_value = c("50", "-15000", "3", "test", "123"),
-  new_value = c("5", "150000", "43", "Adama Sawadogo", "70 12 34 56"),
+  hh_id     = hh_id[c(1108, 1109, 1110, 1111, 1103)],
+  variable  = c("hh_size", "name_head", "name_head", "phone", "duration"),
+  old_value = c("55", "test", "X", "12", "2"),
+  new_value = c("5", "Emmanuel Habimana", "Xavier Niyonzima", "078 123 456", "40"),
   reason    = c(
-    "Erreur de saisie: 50 au lieu de 5",
-    "Valeur negative corrigee apres verification terrain",
-    "Age invraisemblable: enfant de 3 ans comme chef de menage",
+    "Erreur de saisie: 55 au lieu de 5 membres",
     "Entree de test a remplacer par le vrai nom",
-    "Numero de telephone incomplet corrige"
+    "Nom incomplet corrige apres verification",
+    "Numero de telephone incomplet",
+    "Duree trop courte - enqueteur a confirme 40 minutes"
   ),
   stringsAsFactors = FALSE
 )
@@ -258,3 +248,8 @@ corrections_sample <- data.frame(
 # --- Save datasets ---
 usethis::use_data(survey_sample, backcheck_sample, corrections_sample,
                   overwrite = TRUE)
+
+cat("Datasets saved:\n")
+cat("  survey_sample:", nrow(survey_sample), "x", ncol(survey_sample), "\n")
+cat("  backcheck_sample:", nrow(backcheck_sample), "x", ncol(backcheck_sample), "\n")
+cat("  corrections_sample:", nrow(corrections_sample), "x", ncol(corrections_sample), "\n")

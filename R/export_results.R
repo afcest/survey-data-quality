@@ -92,7 +92,7 @@ export_to_excel <- function(report, data = NULL, id_col = NULL,
     if (is.null(entry)) next
 
     sheet_result <- tryCatch({
-      builder_fn <- match.fun(entry$builder)
+      builder_fn <- get(entry$builder, envir = asNamespace("afcestDataCheck"))
       builder_fn(ctx)
     }, error = function(e) {
       cli::cli_warn("Sheet builder {.val {key}} failed: {e$message}")

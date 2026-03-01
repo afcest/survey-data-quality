@@ -48,6 +48,23 @@
 
 ## Bug fixes
 
+* Fixed `export_to_excel()` variable/value columns being NA across most sheets.
+  `.extract_variable_from_check()` heuristic replaced with `.get_check_variable()`
+  that reads `summary_stat$variable` first (where outlier, range, fabrication
+  checks store it).
+* Fixed Missing Data sheet: now extracts per-variable stats from C01's
+  `miss_stats` tibble and C04's `flagged_ids` instead of producing a single
+  broken row.
+* Fixed Fabrication Flags sheet: one clean row per variable with `check_type`,
+  `test_statistic`, `p_value`, and `result` columns instead of exploded
+  `stat_*` columns from nested `summary_stat`.
+* Fixed Duplicate IDs sheet: now shows only key identifying columns (ID,
+  enumerator, date, name, phone, village, district) instead of all 31+ data
+  columns.
+* Fixed Corrections Log: filters to record-level actionable flags only
+  (excludes fabrication and aggregate completeness checks).
+* Added human-readable `description` column to Check Summary sheet with
+  plain-English explanations for 30+ check codes.
 * Fixed `check_dk_rate()` vectorization bug when multiple DK values provided.
 * Fixed `check_duplicate_ids()` dead code path and O(n^2) performance issue.
 * Fixed `normalize_survey_data()` timezone handling for POSIXct columns.

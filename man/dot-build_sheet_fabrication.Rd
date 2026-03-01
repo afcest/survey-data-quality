@@ -7,6 +7,9 @@
 .build_sheet_fabrication(ctx)
 }
 \description{
-Build Sheet: Fabrication Flags
+Builds one row per fabrication check result directly from the results list.
+Fabrication checks (M01 Benford 1st digit, M02 Benford 2nd digit,
+M03 Digit preference) flag variables not records, so the flagged table
+approach doesn't work well. Instead we read summary_stat directly.
 }
 \keyword{internal}

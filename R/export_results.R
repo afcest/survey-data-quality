@@ -348,9 +348,9 @@ export_to_csv <- function(report, output_dir, prefix = "hfc_report",
       rep(NA_character_, n)
     }
 
-    # Extract variable name from check_name (heuristic: after last underscore
-    # pattern like D01_outlier_iqr_VARNAME)
-    variable <- .extract_variable_from_check(cr$check_name)
+    # Extract variable name from check_result (summary_stat$variable first,
+    # then fallback to parsing check_name)
+    variable <- .get_check_variable(cr)
 
     out <- dplyr::tibble(
       id             = cr$flagged_ids,
@@ -609,6 +609,12 @@ export_to_csv <- function(report, output_dir, prefix = "hfc_report",
 
 
 #' Build the Corrections template sheet
+#'
+#' Filters to only record-level, actionable flags that a field team can act on.
+#' Excludes fabrication checks (flag variables, not records), aggregate
+#' completeness checks (C01, C02 flag variables/enumerators), and other
+#' non-actionable flags.
+#'
 #' @keywords internal
 .build_corrections_template <- function(flagged_tbl) {
   template <- dplyr::tibble(
@@ -621,20 +627,33 @@ export_to_csv <- function(report, output_dir, prefix = "hfc_report",
   )
 
   if (nrow(flagged_tbl) > 0) {
-    # Include all flagged records in corrections template
-    n_examples <- nrow(flagged_tbl)
-    examples <- flagged_tbl[seq_len(n_examples), , drop = FALSE]
+    # Filter to actionable, record-level flags only
+    actionable <- flagged_tbl
 
-    example_rows <- dplyr::tibble(
-      id        = examples$id,
-      variable  = if ("variable" %in% names(examples)) examples$variable else NA_character_,
-      old_value = if ("value" %in% names(examples)) examples$value else NA_character_,
-      new_value = rep(NA_character_, n_examples),
-      action    = rep("pending", n_examples),
-      reason    = if ("flag_reason" %in% names(examples)) examples$flag_reason else NA_character_
-    )
+    # Exclude fabrication checks (flag variables, not records)
+    if ("check_category" %in% names(actionable)) {
+      actionable <- actionable[is.na(actionable$check_category) |
+                                 actionable$check_category != "fabrication", , drop = FALSE]
+    }
 
-    template <- dplyr::bind_rows(template, example_rows)
+    # Exclude aggregate completeness checks that flag variables/enumerators
+    if ("check_name" %in% names(actionable)) {
+      exclude_pattern <- "^C01_missing_by_variable$|^C02_|^C04_all_missing_variable$"
+      actionable <- actionable[!grepl(exclude_pattern, actionable$check_name), , drop = FALSE]
+    }
+
+    if (nrow(actionable) > 0L) {
+      example_rows <- dplyr::tibble(
+        id        = actionable$id,
+        variable  = if ("variable" %in% names(actionable)) actionable$variable else NA_character_,
+        old_value = if ("value" %in% names(actionable)) actionable$value else NA_character_,
+        new_value = rep(NA_character_, nrow(actionable)),
+        action    = rep("pending", nrow(actionable)),
+        reason    = if ("flag_reason" %in% names(actionable)) actionable$flag_reason else NA_character_
+      )
+
+      template <- dplyr::bind_rows(template, example_rows)
+    }
   }
 
   template
@@ -725,19 +744,21 @@ export_to_csv <- function(report, output_dir, prefix = "hfc_report",
 }
 
 
-#' Extract a variable name from a check_name string
+#' Extract a variable name from a check_result object
 #'
-#' Heuristic: for checks like "D01_outlier_iqr_income", extracts "income".
-#' For checks like "A01_duplicate_id", returns NA.
+#' Reads `summary_stat$variable` first (where outlier, range, negative,
+#' fabrication checks store it), then falls back to parsing the check_name
+#' string for checks that encode the variable in the name.
 #'
+#' @param cr A check_result object.
+#' @return Character scalar: the variable name, or `NA_character_`.
 #' @keywords internal
-.extract_variable_from_check <- function(check_name) {
-  # Pattern: prefix_method_VARNAME (3+ underscored parts after the code)
-  parts <- strsplit(check_name, "_", fixed = TRUE)[[1]]
-  if (length(parts) >= 4L) {
-    # Variable is everything after the third part
-    return(paste(parts[4:length(parts)], collapse = "_"))
+.get_check_variable <- function(cr) {
+  if (is.list(cr$summary_stat) && !is.null(cr$summary_stat$variable)) {
+    return(as.character(cr$summary_stat$variable))
   }
+  parts <- strsplit(cr$check_name, "_", fixed = TRUE)[[1]]
+  if (length(parts) >= 4L) return(paste(parts[4:length(parts)], collapse = "_"))
   NA_character_
 }
 
@@ -983,13 +1004,69 @@ format_sheet_name <- function(cat) {
 }
 
 
+#' Human-readable descriptions for common check codes
+#' @keywords internal
+.check_descriptions <- c(
+
+  # Identification
+  A01_duplicate_id              = "Records sharing the same household ID",
+  A02_duplicate_id_enumerator   = "Same ID submitted by the same enumerator",
+  A03_duplicate_id_date         = "Same ID submitted on the same date",
+
+
+  # Completeness
+  C01_missing_by_variable       = "Variables with missing values above threshold",
+  C02_enumerator_missing_rate   = "Enumerators with high rates of missing data",
+  C03_missing_key_variable      = "Key identification variables with missing values",
+  C04_all_missing_variable      = "Variables that are 100% missing across all records",
+
+  # Outliers
+  D01_outlier_iqr               = "Extreme values detected (IQR method)",
+  D02_outlier_sd                = "Extreme values detected (standard deviation method)",
+
+  # Constraints
+  D03_hard_range                = "Values outside hard minimum/maximum range",
+  D04_negative_value            = "Negative values in fields that should be non-negative",
+
+  # GPS
+  E01_gps_missing               = "Records with missing GPS coordinates",
+  E02_gps_low_accuracy          = "GPS readings with low accuracy (high error radius)",
+  E03_gps_outside_boundary      = "GPS coordinates outside expected geographic area",
+  E04_gps_duplicate_location    = "Multiple records at the exact same GPS location",
+  E05_gps_distance_outlier      = "GPS location unusually far from other records",
+  E06_gps_at_centroid           = "GPS coordinates at administrative area centroid",
+  E07_gps_null_island           = "GPS coordinates at 0,0 (default/missing location)",
+
+  # Timing
+  F01_short_duration            = "Interview completed too quickly (suspiciously short)",
+  F02_long_duration             = "Interview took unusually long",
+  F03_off_hours                 = "Interview conducted outside normal working hours",
+  F04_start_end_mismatch        = "Interview start/end timestamps are inconsistent",
+
+  # Logic
+  G01_logic_check               = "Logical inconsistency between related variables",
+
+  # Skip patterns
+  H01_skip_pattern              = "Skip logic violated (answered when should skip, or vice versa)",
+
+  # Other specify
+  K01_other_specify             = "Free-text 'other' responses that may need recoding",
+
+  # Fabrication
+  M01_benford_first_digit       = "First-digit distribution deviates from expected pattern",
+  M02_benford_second_digit      = "Second-digit distribution deviates from expected pattern",
+  M03_digit_preference          = "Terminal digit distribution shows systematic preference"
+)
+
+
 #' Build Sheet: Check Summary
 #' @keywords internal
 .build_sheet_summary <- function(ctx) {
   stbl <- ctx$summary_tbl
   if (nrow(stbl) == 0L) {
     df <- dplyr::tibble(
-      check_name = character(), check_category = character(),
+      check_name = character(), description = character(),
+      check_category = character(),
       n_flagged = integer(), n_total = integer(),
       pct_flagged = numeric(), severity = character(),
       status = character()
@@ -997,8 +1074,23 @@ format_sheet_name <- function(cat) {
     return(list(df = df, title = "Check Summary"))
   }
 
+  # Look up description: try exact match, then match by prefix (for variable-
+
+  # specific checks like D01_outlier_iqr_income -> D01_outlier_iqr)
+  descriptions <- vapply(stbl$check_name, function(cn) {
+    if (cn %in% names(.check_descriptions)) return(.check_descriptions[[cn]])
+    # Try matching by prefix (strip trailing _varname)
+    parts <- strsplit(cn, "_", fixed = TRUE)[[1]]
+    for (n_parts in min(length(parts), 4):2) {
+      prefix <- paste(parts[seq_len(n_parts)], collapse = "_")
+      if (prefix %in% names(.check_descriptions)) return(.check_descriptions[[prefix]])
+    }
+    NA_character_
+  }, character(1), USE.NAMES = FALSE)
+
   df <- dplyr::tibble(
     check_name     = stbl$check_name,
+    description    = descriptions,
     check_category = if ("check_category" %in% names(stbl)) stbl$check_category else NA_character_,
     n_flagged      = stbl$n_flagged,
     n_total        = if ("n_total" %in% names(stbl)) stbl$n_total else NA_integer_,
@@ -1027,14 +1119,18 @@ format_sheet_name <- function(cat) {
     return(list(df = df, title = "Duplicate IDs"))
   }
 
-  # Build output with data columns if available
+  # Build output with key identifying columns from data (not all 31+ columns)
   if (!is.null(ctx$data) && !is.null(ctx$id_col) &&
       ctx$id_col %in% names(ctx$data)) {
     dup_ids <- unique(subset$id)
     ids_lookup <- as_id(ctx$data[[ctx$id_col]])
     match_rows <- ids_lookup %in% as_id(dup_ids)
     if (any(match_rows)) {
-      dup_data <- ctx$data[match_rows, , drop = FALSE]
+      # Select only key identifying columns
+      key_cols <- unique(c(ctx$id_col, ctx$enum_col, ctx$date_col,
+                           "name_head", "phone", "village", "district"))
+      key_cols <- intersect(key_cols[!is.na(key_cols)], names(ctx$data))
+      dup_data <- ctx$data[match_rows, key_cols, drop = FALSE]
       # Add flag info
       flag_info <- unique(subset[, c("id", "check_name", "flag_reason", "severity"),
                                   drop = FALSE])
@@ -1153,6 +1249,13 @@ format_sheet_name <- function(cat) {
 
 
 #' Build Sheet: Missing Data
+#'
+#' Builds a clean table of per-variable missing data statistics from:
+#' - C01_missing_by_variable: has `summary_stat$miss_stats` (tibble with
+#'   variable, n_missing, n_total, miss_rate) and `flagged_ids` = variable names
+#' - C04_all_missing_variable: `flagged_ids` = variable names (100% missing)
+#' - Any other completeness check with per-variable stats
+#'
 #' @keywords internal
 .build_sheet_all_missing <- function(ctx) {
   results <- ctx$results
@@ -1161,36 +1264,64 @@ format_sheet_name <- function(cat) {
     return(list(df = df, title = "Missing Data"))
   }
 
-  # Collect missing-related checks from results
   rows <- list()
+
   for (cr in results) {
     if (!is_check_result(cr)) next
-    is_missing <- grepl("all_missing", cr$check_name, ignore.case = TRUE) ||
-      (isTRUE(cr$check_category == "completeness") &&
-       grepl("missing_variable", cr$check_name, ignore.case = TRUE))
-    if (!is_missing) next
+    if (!isTRUE(cr$check_category == "completeness") &&
+        !grepl("missing|all_missing", cr$check_name, ignore.case = TRUE)) next
 
-    variable <- .extract_variable_from_check(cr$check_name)
-    # Try to extract stats from summary_stat
-    n_miss <- cr$n_flagged
-    pct_miss <- NA_real_
-    if (is.list(cr$summary_stat)) {
-      if (!is.null(cr$summary_stat$n_missing)) n_miss <- cr$summary_stat$n_missing
-      if (!is.null(cr$summary_stat$pct_missing)) pct_miss <- cr$summary_stat$pct_missing
+    # C01: extract miss_stats tibble (one row per flagged variable)
+    if (is.list(cr$summary_stat) &&
+        is.data.frame(cr$summary_stat$miss_stats)) {
+      ms <- cr$summary_stat$miss_stats
+      # Filter to flagged variables only (those in flagged_ids)
+      if (cr$n_flagged > 0L && length(cr$flagged_ids) > 0L) {
+        ms <- ms[ms$variable %in% cr$flagged_ids, , drop = FALSE]
+      }
+      if (nrow(ms) > 0L) {
+        rows[[length(rows) + 1L]] <- dplyr::tibble(
+          variable    = as.character(ms$variable),
+          n_missing   = as.integer(if ("n_missing" %in% names(ms)) ms$n_missing else NA_integer_),
+          n_total     = as.integer(if ("n_total" %in% names(ms)) ms$n_total else NA_integer_),
+          pct_missing = as.numeric(if ("miss_rate" %in% names(ms)) round(ms$miss_rate * 100, 1)
+                                   else NA_real_),
+          severity    = rep(cr$severity, nrow(ms)),
+          check_name  = rep(cr$check_name, nrow(ms))
+        )
+      }
+      next
     }
-    rows[[length(rows) + 1L]] <- dplyr::tibble(
-      variable    = if (!is.null(variable) && !is.na(variable)) variable else cr$check_name,
-      n_missing   = as.integer(n_miss),
-      pct_missing = as.numeric(pct_miss),
-      severity    = cr$severity
-    )
+
+    # C04 and others: flagged_ids ARE variable names
+    if (cr$n_flagged > 0L && length(cr$flagged_ids) > 0L) {
+      n <- cr$n_flagged
+      flag_reasons <- if (length(cr$flag_reason) == n) {
+        cr$flag_reason
+      } else if (length(cr$flag_reason) == 1L) {
+        rep(cr$flag_reason, n)
+      } else {
+        rep(NA_character_, n)
+      }
+      rows[[length(rows) + 1L]] <- dplyr::tibble(
+        variable    = cr$flagged_ids,
+        n_missing   = rep(NA_integer_, n),
+        n_total     = rep(NA_integer_, n),
+        pct_missing = rep(NA_real_, n),
+        severity    = rep(cr$severity, n),
+        check_name  = rep(cr$check_name, n)
+      )
+    }
   }
 
   if (length(rows) == 0L) {
     df <- dplyr::tibble(message = "No issues found in this category.")
     return(list(df = df, title = "Missing Data"))
   }
+
   df <- dplyr::bind_rows(rows)
+  # Sort by pct_missing descending (NAs last)
+  df <- df[order(-df$pct_missing, na.last = TRUE), ]
   list(df = df, title = "Missing Data")
 }
 
@@ -1338,50 +1469,64 @@ format_sheet_name <- function(cat) {
 
 
 #' Build Sheet: Fabrication Flags
+#'
+#' Builds one row per fabrication check result directly from the results list.
+#' Fabrication checks (M01 Benford 1st digit, M02 Benford 2nd digit,
+#' M03 Digit preference) flag variables not records, so the flagged table
+#' approach doesn't work well. Instead we read summary_stat directly.
+#'
 #' @keywords internal
 .build_sheet_fabrication <- function(ctx) {
-  ft <- ctx$flagged_tbl
   results <- ctx$results
-  if (nrow(ft) == 0L) {
-    df <- dplyr::tibble(message = "No issues found in this category.")
-    return(list(df = df, title = "Fabrication Flags"))
-  }
 
-  mask <- !is.na(ft$check_category) & ft$check_category == "fabrication"
-  subset <- ft[mask, , drop = FALSE]
-  if (nrow(subset) == 0L) {
-    df <- dplyr::tibble(message = "No issues found in this category.")
-    return(list(df = df, title = "Fabrication Flags"))
-  }
-
-  base_cols <- intersect(c("id", "enumerator"), names(subset))
-  df <- subset[, base_cols, drop = FALSE]
-  df$check_name <- subset$check_name
-  df$flag_reason <- subset$flag_reason
-  df$severity <- subset$severity
-
-  # Add relevant summary_stat values from results
+  rows <- list()
   for (cr in results) {
     if (!is_check_result(cr)) next
     if (!isTRUE(cr$check_category == "fabrication")) next
-    if (is.list(cr$summary_stat) && length(cr$summary_stat) > 0) {
-      for (stat_name in names(cr$summary_stat)) {
-        col_name <- paste0("stat_", stat_name)
-        if (!col_name %in% names(df)) {
-          df[[col_name]] <- rep(NA_character_, nrow(df))
-        }
-        cr_rows <- df$check_name == cr$check_name
-        if (any(cr_rows)) {
-          val <- cr$summary_stat[[stat_name]]
-          if (length(val) == 1L) {
-            df[[col_name]][cr_rows] <- val
-          }
-        }
-      }
+
+    variable <- if (is.list(cr$summary_stat) && !is.null(cr$summary_stat$variable)) {
+      as.character(cr$summary_stat$variable)
+    } else {
+      NA_character_
     }
+
+    # Determine check type label from check_name
+    check_type <- if (grepl("benford.*first|M01", cr$check_name, ignore.case = TRUE)) {
+      "Benford 1st digit"
+    } else if (grepl("benford.*second|M02", cr$check_name, ignore.case = TRUE)) {
+      "Benford 2nd digit"
+    } else if (grepl("digit_pref|terminal|M03", cr$check_name, ignore.case = TRUE)) {
+      "Digit preference"
+    } else {
+      cr$check_name
+    }
+
+    # Extract test statistics
+    ss <- cr$summary_stat
+    chi_sq <- if (is.list(ss) && !is.null(ss$chi_sq_stat)) round(as.numeric(ss$chi_sq_stat), 3) else NA_real_
+    p_val  <- if (is.list(ss) && !is.null(ss$p_value)) round(as.numeric(ss$p_value), 4) else NA_real_
+
+    result_label <- if (cr$n_flagged > 0L) "FAIL" else "PASS"
+    flag_reason <- if (length(cr$flag_reason) >= 1L) cr$flag_reason[1] else NA_character_
+
+    rows[[length(rows) + 1L]] <- dplyr::tibble(
+      variable       = variable,
+      check_type     = check_type,
+      test_statistic = chi_sq,
+      p_value        = p_val,
+      result         = result_label,
+      flag_reason    = flag_reason,
+      severity       = cr$severity
+    )
   }
 
-  list(df = dplyr::as_tibble(df), title = "Fabrication Flags")
+  if (length(rows) == 0L) {
+    df <- dplyr::tibble(message = "No issues found in this category.")
+    return(list(df = df, title = "Fabrication Flags"))
+  }
+
+  df <- dplyr::bind_rows(rows)
+  list(df = df, title = "Fabrication Flags")
 }
 
 

@@ -7,6 +7,12 @@
 .build_sheet_all_missing(ctx)
 }
 \description{
-Build Sheet: Missing Data
+Builds a clean table of per-variable missing data statistics from:
+\itemize{
+\item C01_missing_by_variable: has \code{summary_stat$miss_stats} (tibble with
+variable, n_missing, n_total, miss_rate) and \code{flagged_ids} = variable names
+\item C04_all_missing_variable: \code{flagged_ids} = variable names (100\% missing)
+\item Any other completeness check with per-variable stats
+}
 }
 \keyword{internal}

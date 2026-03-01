@@ -7,6 +7,9 @@
 .build_corrections_template(flagged_tbl)
 }
 \description{
-Build the Corrections template sheet
+Filters to only record-level, actionable flags that a field team can act on.
+Excludes fabrication checks (flag variables, not records), aggregate
+completeness checks (C01, C02 flag variables/enumerators), and other
+non-actionable flags.
 }
 \keyword{internal}
